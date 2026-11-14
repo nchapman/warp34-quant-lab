@@ -1,0 +1,28 @@
+{
+  "base": {
+    "repo": "Qwen/Qwen3.8-27B",
+    "sha": "37561816e66b5b9153b1b64c10968c18c1e6f4a0",
+    "local_path": "/root/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/37561816e66b5b9153b1b64c10968c18c1e6f4a0"
+  },
+  "gguf_repo": {
+    "repo": "unsloth/Qwen3.8-27B-GGUF",
+    "sha": "4af51b3542f775b0a8e4b310bfb3f17e01c306c9",
+    "files": {
+      "Qwen3.8-27B-UD-Q4_K_XL.gguf": {
+        "size_bytes": 17659407264,
+        "lfs_sha256": "2a5f3565f39cf885103da591182c1266da64745737b42b452fd3e675369f1211",
+        "blob_id": "19942ecf7d2c9fc74ee2748a2dc4d6c526229da5"
+      },
+      "Qwen3.8-27B-UD-Q4_K_M.gguf": {
+        "size_bytes": 16564259744,
+        "lfs_sha256": "1bce504dfecd84153666928a41d8a66706f0158d3a317bc5196b72819d7dc529",
+        "blob_id": "8fda9aaafb572d2d12ede317ea4da19a6afcdad6"
+      }
+    }
+  },
+  "nvfp4_repo": {
+    "repo": "unsloth/Qwen3.8-27B-NVFP4",
+    "sha": "f0b7c9e722f5565102fff8481c99e4d86ae099c7",
+    "size_bytes": 23417592488
+  }
+}

@@ -484,6 +484,29 @@ def test_vision_v2_split_disjointness_and_calibration_guard():
             assert "Refusing to evaluate Vision on calibration fixture" in str(exc)
 
 
+def test_gguf_model_class_and_probe_guards():
+    from warp_quant.hadamard_gptq import load_quant_model_with_transforms
+    from warp_quant.models import gguf_model_class
+
+    with tempfile.TemporaryDirectory() as tmp:
+        base_d = Path(tmp)
+        (base_d / "config.json").write_text(json.dumps({"model_type": "qwen3_5"}))
+        cls = gguf_model_class(str(base_d))
+        assert cls.__name__ == "Qwen3_5ForCausalLM"
+
+        (base_d / "config.json").write_text(json.dumps({"model_type": "qwen3_5_moe"}))
+        cls_moe = gguf_model_class(str(base_d))
+        assert cls_moe.__name__ == "Qwen3_5MoeForCausalLM"
+
+        fake_gguf = base_d / "dummy.gguf"
+        fake_gguf.write_bytes(b"GGUF")
+        try:
+            load_quant_model_with_transforms(fake_gguf, device="cpu", base_dir=None, base_tokenizer=None)
+            raise AssertionError("Expected ValueError when base_dir is missing for GGUF probe")
+        except ValueError as exc:
+            assert "base_dir" in str(exc)
+
+
 class RotExperimentTests(unittest.TestCase):
     def test_target_regexes(self):
         test_target_regexes_match_hf_and_vllm_names()
@@ -505,6 +528,9 @@ class RotExperimentTests(unittest.TestCase):
 
     def test_vision_v2_split_and_guard(self):
         test_vision_v2_split_disjointness_and_calibration_guard()
+
+    def test_gguf_probe_guards(self):
+        test_gguf_model_class_and_probe_guards()
 
 
 if __name__ == "__main__":

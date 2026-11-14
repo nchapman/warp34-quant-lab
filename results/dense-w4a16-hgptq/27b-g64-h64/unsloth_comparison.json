@@ -1,0 +1,1155 @@
+{
+  "base_model": {
+    "repo": "Qwen/Qwen3.8-27B",
+    "sha": "37561816e66b5b9153b1b64c10968c18c1e6f4a0",
+    "local_path": "/root/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/37561816e66b5b9153b1b64c10968c18c1e6f4a0"
+  },
+  "unsloth_provenance": {
+    "gguf_repo": {
+      "repo": "unsloth/Qwen3.8-27B-GGUF",
+      "sha": "4af51b3542f775b0a8e4b310bfb3f17e01c306c9",
+      "files": {
+        "Qwen3.8-27B-UD-Q4_K_XL.gguf": {
+          "size_bytes": 17659407264,
+          "lfs_sha256": "2a5f3565f39cf885103da591182c1266da64745737b42b452fd3e675369f1211",
+          "blob_id": "19942ecf7d2c9fc74ee2748a2dc4d6c526229da5"
+        },
+        "Qwen3.8-27B-UD-Q4_K_M.gguf": {
+          "size_bytes": 16564259744,
+          "lfs_sha256": "1bce504dfecd84153666928a41d8a66706f0158d3a317bc5196b72819d7dc529",
+          "blob_id": "8fda9aaafb572d2d12ede317ea4da19a6afcdad6"
+        }
+      }
+    },
+    "nvfp4_repo": {
+      "repo": "unsloth/Qwen3.8-27B-NVFP4",
+      "sha": "f0b7c9e722f5565102fff8481c99e4d86ae099c7",
+      "size_bytes": 23417592488
+    }
+  },
+  "architecture_and_byte_budget": {
+    "nchapman/Qwen3.8-27B-W4A16-HGPTQ": {
+      "total_size_gb": 17.33,
+      "total_size_gib": 16.14,
+      "text_trunk_plus_head_embeds_gb": 15.61,
+      "includes_vision_encoder": true,
+      "vision_size_gb": 1.18,
+      "includes_native_mtp": true,
+      "mtp_size_gb": 0.54,
+      "scheme": "Uniform W4A16-HGPTQ (g64-h64 Hadamard + Cholesky GPTQ + MSE + 2-pass H-CD + FP32 Norm/GDN QAT + W8_g64 lm_head + BF16 embed_tokens)",
+      "trunk_64_layers_linear_params": 24326963200,
+      "trunk_64_layers_gb": 12.92,
+      "trunk_64_layers_gib": 12.04,
+      "trunk_64_layers_effective_bpw": 4.25,
+      "embed_tokens_dtype": "BF16 (16.0 bpw, 2.54 GB)",
+      "lm_head_dtype": "W8_g64 GPTQ+MSE (8.25 bpw, 1.31 GB)"
+    },
+    "unsloth/Qwen3.8-27B-GGUF:Qwen3.8-27B-UD-Q4_K_XL.gguf": {
+      "total_size_gb": 17.66,
+      "multimodal_bundle_with_mmproj_bf16_gb": 18.59,
+      "includes_vision_encoder": false,
+      "includes_native_mtp": true,
+      "pct_bytes_above_4bit": 64.79,
+      "bytes_in_q5_q6_q8_gb": 11.44,
+      "bytes_in_q4_k_gb": 6.21,
+      "embed_tokens_dtype": "Q4_K (4.5 bpw, 0.72 GB vs 2.54 GB BF16)",
+      "lm_head_dtype": "Q6_K (6.56 bpw, 1.04 GB)",
+      "scheme": "Unsloth Dynamic V3.1 GGUF (56.6% of params / 64.8% of bytes promoted to 5-bit Q5_K, 6-bit Q6_K, and 8-bit Q8_0; Vision split to mmproj-BF16.gguf +0.93 GB; MTP stored in blk.64 at 0.345 GB Q6_K/Q8_0 plus standalone 1.37 GB MTP draft GGUF; embed_tokens quantized to Q4_K)",
+      "trunk_64_layers_linear_params": 24326963200,
+      "trunk_64_layers_gb": 15.54,
+      "trunk_64_layers_gib": 14.47,
+      "trunk_64_layers_effective_bpw": 5.11,
+      "trunk_byte_overhead_vs_w4a16_hgptq_pct": 20.24,
+      "separate_mmproj_bf16_gb": 0.93,
+      "mtp_blk64_size_gb": 0.351,
+      "standalone_mtp_draft_gguf_gb": 1.37
+    },
+    "unsloth/Qwen3.8-27B-GGUF:Qwen3.8-27B-UD-Q4_K_M.gguf": {
+      "total_size_gb": 16.56,
+      "multimodal_bundle_with_mmproj_bf16_gb": 17.49,
+      "includes_vision_encoder": false,
+      "includes_native_mtp": true,
+      "pct_bytes_above_4bit": 50.14,
+      "bytes_in_q5_q6_q8_gb": 8.3,
+      "bytes_in_q4_k_gb": 8.25,
+      "embed_tokens_dtype": "Q4_K (4.5 bpw, 0.72 GB vs 2.54 GB BF16)",
+      "lm_head_dtype": "Q6_K (6.56 bpw, 1.04 GB)",
+      "scheme": "Unsloth Dynamic V3.1 GGUF (41.3% of params / 50.1% of bytes in Q5_K/Q6_K/Q8_0; Vision split to mmproj-BF16.gguf +0.93 GB; MTP stored in blk.64 at 0.251 GB; embed_tokens quantized to Q4_K)",
+      "trunk_64_layers_linear_params": 24326963200,
+      "trunk_64_layers_gb": 14.44,
+      "trunk_64_layers_gib": 13.45,
+      "trunk_64_layers_effective_bpw": 4.75,
+      "trunk_byte_overhead_vs_w4a16_hgptq_pct": 11.76,
+      "separate_mmproj_bf16_gb": 0.93,
+      "mtp_blk64_size_gb": 0.351,
+      "standalone_mtp_draft_gguf_gb": 1.37
+    },
+    "unsloth/Qwen3.8-27B-NVFP4": {
+      "total_size_gb": 23.42,
+      "total_size_gib": 21.81,
+      "includes_vision_encoder": true,
+      "includes_native_mtp": true,
+      "scheme": "Unsloth Dynamic V3.0 NVFP4 (no Hadamard rotation, no GPTQ/QAT; keeps all self_attn, all GDN linear_attn, lm_head, and layers.56..63.mlp in FP8 W8A8; only layers.0..55.mlp in NVFP4 g16; Vision and MTP unquantized BF16)"
+    }
+  },
+  "probes": {
+    "nchapman/Qwen3.8-27B-W4A16-HGPTQ": {
+      "probe-v4": {
+        "eval_set": "probe-v4.jsonl",
+        "rows": 378,
+        "tokens": 852269,
+        "ppl_base": 8.5332,
+        "ppl_quant": 8.1841,
+        "ppl_delta_pct": -4.091,
+        "mean_kl": 0.258263,
+        "weighted_kl": 0.100223,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 23.3572,
+        "elapsed_s": 131.5,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 2566,
+            "mean_kl": 0.053405,
+            "ppl_base": 139.4335,
+            "ppl_quant": 129.7317
+          },
+          "belebele_deu_Latn": {
+            "tokens": 2699,
+            "mean_kl": 0.068874,
+            "ppl_base": 119.692,
+            "ppl_quant": 109.3444
+          },
+          "belebele_fra_Latn": {
+            "tokens": 2572,
+            "mean_kl": 0.081331,
+            "ppl_base": 134.628,
+            "ppl_quant": 113.0216
+          },
+          "belebele_hin_Deva": {
+            "tokens": 3652,
+            "mean_kl": 0.067642,
+            "ppl_base": 45.5772,
+            "ppl_quant": 42.7622
+          },
+          "belebele_ita_Latn": {
+            "tokens": 2761,
+            "mean_kl": 0.056169,
+            "ppl_base": 120.7844,
+            "ppl_quant": 108.2409
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 2350,
+            "mean_kl": 0.064311,
+            "ppl_base": 163.5761,
+            "ppl_quant": 148.5068
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 2739,
+            "mean_kl": 0.066409,
+            "ppl_base": 139.8915,
+            "ppl_quant": 127.4309
+          },
+          "belebele_spa_Latn": {
+            "tokens": 2725,
+            "mean_kl": 0.065088,
+            "ppl_base": 124.6017,
+            "ppl_quant": 108.1183
+          },
+          "belebele_zho_Hans": {
+            "tokens": 2177,
+            "mean_kl": 0.041865,
+            "ppl_base": 404.5101,
+            "ppl_quant": 346.8688
+          },
+          "chat": {
+            "tokens": 220943,
+            "mean_kl": 0.022294,
+            "ppl_base": 4.2233,
+            "ppl_quant": 4.2085
+          },
+          "conversational_agent": {
+            "tokens": 73240,
+            "mean_kl": 1.690239,
+            "ppl_base": 6194.1829,
+            "ppl_quant": 4452.9873
+          },
+          "instruction_following": {
+            "tokens": 41479,
+            "mean_kl": 0.035424,
+            "ppl_base": 7.8094,
+            "ppl_quant": 7.6892
+          },
+          "math": {
+            "tokens": 303481,
+            "mean_kl": 0.071791,
+            "ppl_base": 3.0843,
+            "ppl_quant": 3.0408
+          },
+          "science": {
+            "tokens": 66035,
+            "mean_kl": 0.060677,
+            "ppl_base": 5.5573,
+            "ppl_quant": 5.3642
+          },
+          "swe": {
+            "tokens": 65520,
+            "mean_kl": 0.707458,
+            "ppl_base": 4.2936,
+            "ppl_quant": 4.3045
+          },
+          "terminal_agent": {
+            "tokens": 57330,
+            "mean_kl": 0.283253,
+            "ppl_base": 7.6369,
+            "ppl_quant": 7.5162
+          }
+        }
+      },
+      "probe-guard": {
+        "eval_set": "probe-guard.jsonl",
+        "rows": 76,
+        "tokens": 22746,
+        "ppl_base": 61.0805,
+        "ppl_quant": 56.6664,
+        "ppl_delta_pct": -7.227,
+        "mean_kl": 0.052982,
+        "weighted_kl": 0.073907,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 7.1944,
+        "elapsed_s": 12.26,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 988,
+            "mean_kl": 0.04376,
+            "ppl_base": 196.3369,
+            "ppl_quant": 177.616
+          },
+          "belebele_deu_Latn": {
+            "tokens": 1065,
+            "mean_kl": 0.064967,
+            "ppl_base": 112.0449,
+            "ppl_quant": 107.4869
+          },
+          "belebele_fra_Latn": {
+            "tokens": 1153,
+            "mean_kl": 0.087202,
+            "ppl_base": 117.8634,
+            "ppl_quant": 100.0416
+          },
+          "belebele_hin_Deva": {
+            "tokens": 1682,
+            "mean_kl": 0.079076,
+            "ppl_base": 61.9491,
+            "ppl_quant": 56.3247
+          },
+          "belebele_ita_Latn": {
+            "tokens": 981,
+            "mean_kl": 0.078863,
+            "ppl_base": 128.2332,
+            "ppl_quant": 111.8968
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 885,
+            "mean_kl": 0.100789,
+            "ppl_base": 148.464,
+            "ppl_quant": 131.9143
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 1135,
+            "mean_kl": 0.071471,
+            "ppl_base": 128.6847,
+            "ppl_quant": 118.1212
+          },
+          "belebele_spa_Latn": {
+            "tokens": 956,
+            "mean_kl": 0.071495,
+            "ppl_base": 151.1492,
+            "ppl_quant": 127.7898
+          },
+          "belebele_zho_Hans": {
+            "tokens": 839,
+            "mean_kl": 0.067543,
+            "ppl_base": 552.7534,
+            "ppl_quant": 489.3757
+          },
+          "no_robots": {
+            "tokens": 13062,
+            "mean_kl": 0.037242,
+            "ppl_base": 33.9924,
+            "ppl_quant": 32.4273
+          }
+        }
+      }
+    },
+    "Qwen3.8-27B-UD-Q4_K_XL.gguf": {
+      "probe-v4": {
+        "eval_set": "probe-v4.jsonl",
+        "rows": 378,
+        "tokens": 852269,
+        "ppl_base": 8.5332,
+        "ppl_quant": 7.6857,
+        "ppl_delta_pct": -9.932,
+        "mean_kl": 0.181935,
+        "weighted_kl": 0.071418,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 22.0217,
+        "elapsed_s": 138.23,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 2566,
+            "mean_kl": 0.044506,
+            "ppl_base": 139.4335,
+            "ppl_quant": 93.3407
+          },
+          "belebele_deu_Latn": {
+            "tokens": 2699,
+            "mean_kl": 0.039833,
+            "ppl_base": 119.692,
+            "ppl_quant": 84.1784
+          },
+          "belebele_fra_Latn": {
+            "tokens": 2572,
+            "mean_kl": 0.075399,
+            "ppl_base": 134.628,
+            "ppl_quant": 92.7249
+          },
+          "belebele_hin_Deva": {
+            "tokens": 3652,
+            "mean_kl": 0.061141,
+            "ppl_base": 45.5772,
+            "ppl_quant": 30.8696
+          },
+          "belebele_ita_Latn": {
+            "tokens": 2761,
+            "mean_kl": 0.055478,
+            "ppl_base": 120.7844,
+            "ppl_quant": 82.0418
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 2350,
+            "mean_kl": 0.049014,
+            "ppl_base": 163.5761,
+            "ppl_quant": 110.784
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 2739,
+            "mean_kl": 0.048379,
+            "ppl_base": 139.8915,
+            "ppl_quant": 95.0185
+          },
+          "belebele_spa_Latn": {
+            "tokens": 2725,
+            "mean_kl": 0.042676,
+            "ppl_base": 124.6017,
+            "ppl_quant": 89.6574
+          },
+          "belebele_zho_Hans": {
+            "tokens": 2177,
+            "mean_kl": 0.041399,
+            "ppl_base": 404.5101,
+            "ppl_quant": 252.871
+          },
+          "chat": {
+            "tokens": 220943,
+            "mean_kl": 0.012932,
+            "ppl_base": 4.2233,
+            "ppl_quant": 4.0206
+          },
+          "conversational_agent": {
+            "tokens": 73240,
+            "mean_kl": 1.245688,
+            "ppl_base": 6194.1829,
+            "ppl_quant": 3545.6311
+          },
+          "instruction_following": {
+            "tokens": 41479,
+            "mean_kl": 0.02142,
+            "ppl_base": 7.8094,
+            "ppl_quant": 6.9751
+          },
+          "math": {
+            "tokens": 303481,
+            "mean_kl": 0.053325,
+            "ppl_base": 3.0843,
+            "ppl_quant": 2.9584
+          },
+          "science": {
+            "tokens": 66035,
+            "mean_kl": 0.044738,
+            "ppl_base": 5.5573,
+            "ppl_quant": 5.1141
+          },
+          "swe": {
+            "tokens": 65520,
+            "mean_kl": 0.447895,
+            "ppl_base": 4.2936,
+            "ppl_quant": 4.4451
+          },
+          "terminal_agent": {
+            "tokens": 57330,
+            "mean_kl": 0.180497,
+            "ppl_base": 7.6369,
+            "ppl_quant": 6.6951
+          }
+        }
+      },
+      "probe-guard": {
+        "eval_set": "probe-guard.jsonl",
+        "rows": 76,
+        "tokens": 22746,
+        "ppl_base": 61.0805,
+        "ppl_quant": 46.6382,
+        "ppl_delta_pct": -23.645,
+        "mean_kl": 0.041805,
+        "weighted_kl": 0.056624,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 4.3065,
+        "elapsed_s": 8.32,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 988,
+            "mean_kl": 0.038626,
+            "ppl_base": 196.3369,
+            "ppl_quant": 133.5581
+          },
+          "belebele_deu_Latn": {
+            "tokens": 1065,
+            "mean_kl": 0.033695,
+            "ppl_base": 112.0449,
+            "ppl_quant": 78.1488
+          },
+          "belebele_fra_Latn": {
+            "tokens": 1153,
+            "mean_kl": 0.048341,
+            "ppl_base": 117.8634,
+            "ppl_quant": 82.6341
+          },
+          "belebele_hin_Deva": {
+            "tokens": 1682,
+            "mean_kl": 0.09789,
+            "ppl_base": 61.9491,
+            "ppl_quant": 37.7262
+          },
+          "belebele_ita_Latn": {
+            "tokens": 981,
+            "mean_kl": 0.083756,
+            "ppl_base": 128.2332,
+            "ppl_quant": 85.0899
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 885,
+            "mean_kl": 0.065,
+            "ppl_base": 148.464,
+            "ppl_quant": 93.9697
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 1135,
+            "mean_kl": 0.060584,
+            "ppl_base": 128.6847,
+            "ppl_quant": 82.1118
+          },
+          "belebele_spa_Latn": {
+            "tokens": 956,
+            "mean_kl": 0.048488,
+            "ppl_base": 151.1492,
+            "ppl_quant": 103.7097
+          },
+          "belebele_zho_Hans": {
+            "tokens": 839,
+            "mean_kl": 0.033239,
+            "ppl_base": 552.7534,
+            "ppl_quant": 347.1086
+          },
+          "no_robots": {
+            "tokens": 13062,
+            "mean_kl": 0.028614,
+            "ppl_base": 33.9924,
+            "ppl_quant": 29.0313
+          }
+        }
+      }
+    },
+    "Qwen3.8-27B-UD-Q4_K_M.gguf": {
+      "probe-v4": {
+        "eval_set": "probe-v4.jsonl",
+        "rows": 378,
+        "tokens": 852269,
+        "ppl_base": 8.5332,
+        "ppl_quant": 7.6279,
+        "ppl_delta_pct": -10.608,
+        "mean_kl": 0.22018,
+        "weighted_kl": 0.085548,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 22.3014,
+        "elapsed_s": 128.72,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 2566,
+            "mean_kl": 0.055767,
+            "ppl_base": 139.4335,
+            "ppl_quant": 95.2172
+          },
+          "belebele_deu_Latn": {
+            "tokens": 2699,
+            "mean_kl": 0.052854,
+            "ppl_base": 119.692,
+            "ppl_quant": 82.6676
+          },
+          "belebele_fra_Latn": {
+            "tokens": 2572,
+            "mean_kl": 0.079919,
+            "ppl_base": 134.628,
+            "ppl_quant": 88.5987
+          },
+          "belebele_hin_Deva": {
+            "tokens": 3652,
+            "mean_kl": 0.071286,
+            "ppl_base": 45.5772,
+            "ppl_quant": 31.8746
+          },
+          "belebele_ita_Latn": {
+            "tokens": 2761,
+            "mean_kl": 0.085288,
+            "ppl_base": 120.7844,
+            "ppl_quant": 80.7037
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 2350,
+            "mean_kl": 0.0767,
+            "ppl_base": 163.5761,
+            "ppl_quant": 105.0848
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 2739,
+            "mean_kl": 0.061949,
+            "ppl_base": 139.8915,
+            "ppl_quant": 91.9652
+          },
+          "belebele_spa_Latn": {
+            "tokens": 2725,
+            "mean_kl": 0.05556,
+            "ppl_base": 124.6017,
+            "ppl_quant": 86.0447
+          },
+          "belebele_zho_Hans": {
+            "tokens": 2177,
+            "mean_kl": 0.050421,
+            "ppl_base": 404.5101,
+            "ppl_quant": 248.2326
+          },
+          "chat": {
+            "tokens": 220943,
+            "mean_kl": 0.015712,
+            "ppl_base": 4.2233,
+            "ppl_quant": 4.0495
+          },
+          "conversational_agent": {
+            "tokens": 73240,
+            "mean_kl": 1.456923,
+            "ppl_base": 6194.1829,
+            "ppl_quant": 2991.1041
+          },
+          "instruction_following": {
+            "tokens": 41479,
+            "mean_kl": 0.028208,
+            "ppl_base": 7.8094,
+            "ppl_quant": 7.0923
+          },
+          "math": {
+            "tokens": 303481,
+            "mean_kl": 0.061694,
+            "ppl_base": 3.0843,
+            "ppl_quant": 2.9268
+          },
+          "science": {
+            "tokens": 66035,
+            "mean_kl": 0.054182,
+            "ppl_base": 5.5573,
+            "ppl_quant": 5.2076
+          },
+          "swe": {
+            "tokens": 65520,
+            "mean_kl": 0.58979,
+            "ppl_base": 4.2936,
+            "ppl_quant": 4.6798
+          },
+          "terminal_agent": {
+            "tokens": 57330,
+            "mean_kl": 0.240076,
+            "ppl_base": 7.6369,
+            "ppl_quant": 7.0362
+          }
+        }
+      },
+      "probe-guard": {
+        "eval_set": "probe-guard.jsonl",
+        "rows": 76,
+        "tokens": 22746,
+        "ppl_base": 61.0805,
+        "ppl_quant": 46.6872,
+        "ppl_delta_pct": -23.565,
+        "mean_kl": 0.049592,
+        "weighted_kl": 0.071849,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 4.6042,
+        "elapsed_s": 15.21,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 988,
+            "mean_kl": 0.046943,
+            "ppl_base": 196.3369,
+            "ppl_quant": 131.1664
+          },
+          "belebele_deu_Latn": {
+            "tokens": 1065,
+            "mean_kl": 0.04086,
+            "ppl_base": 112.0449,
+            "ppl_quant": 78.7508
+          },
+          "belebele_fra_Latn": {
+            "tokens": 1153,
+            "mean_kl": 0.059569,
+            "ppl_base": 117.8634,
+            "ppl_quant": 80.6388
+          },
+          "belebele_hin_Deva": {
+            "tokens": 1682,
+            "mean_kl": 0.088695,
+            "ppl_base": 61.9491,
+            "ppl_quant": 39.4224
+          },
+          "belebele_ita_Latn": {
+            "tokens": 981,
+            "mean_kl": 0.100063,
+            "ppl_base": 128.2332,
+            "ppl_quant": 86.8847
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 885,
+            "mean_kl": 0.092363,
+            "ppl_base": 148.464,
+            "ppl_quant": 93.737
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 1135,
+            "mean_kl": 0.078261,
+            "ppl_base": 128.6847,
+            "ppl_quant": 80.1022
+          },
+          "belebele_spa_Latn": {
+            "tokens": 956,
+            "mean_kl": 0.065572,
+            "ppl_base": 151.1492,
+            "ppl_quant": 103.7279
+          },
+          "belebele_zho_Hans": {
+            "tokens": 839,
+            "mean_kl": 0.074316,
+            "ppl_base": 552.7534,
+            "ppl_quant": 332.5909
+          },
+          "no_robots": {
+            "tokens": 13062,
+            "mean_kl": 0.032651,
+            "ppl_base": 33.9924,
+            "ppl_quant": 29.1053
+          }
+        }
+      }
+    },
+    "unsloth/Qwen3.8-27B-NVFP4": {
+      "probe-v4": {
+        "eval_set": "probe-v4.jsonl",
+        "rows": 378,
+        "tokens": 852269,
+        "ppl_base": 8.5332,
+        "ppl_quant": 8.9039,
+        "ppl_delta_pct": 4.344,
+        "mean_kl": 0.436716,
+        "weighted_kl": 0.18048,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 25.574,
+        "elapsed_s": 299.87,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 2566,
+            "mean_kl": 0.141773,
+            "ppl_base": 139.4335,
+            "ppl_quant": 132.1749
+          },
+          "belebele_deu_Latn": {
+            "tokens": 2699,
+            "mean_kl": 0.155501,
+            "ppl_base": 119.692,
+            "ppl_quant": 118.5094
+          },
+          "belebele_fra_Latn": {
+            "tokens": 2572,
+            "mean_kl": 0.197716,
+            "ppl_base": 134.628,
+            "ppl_quant": 123.06
+          },
+          "belebele_hin_Deva": {
+            "tokens": 3652,
+            "mean_kl": 0.138418,
+            "ppl_base": 45.5772,
+            "ppl_quant": 43.7575
+          },
+          "belebele_ita_Latn": {
+            "tokens": 2761,
+            "mean_kl": 0.154298,
+            "ppl_base": 120.7844,
+            "ppl_quant": 124.1731
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 2350,
+            "mean_kl": 0.175554,
+            "ppl_base": 163.5761,
+            "ppl_quant": 157.696
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 2739,
+            "mean_kl": 0.175677,
+            "ppl_base": 139.8915,
+            "ppl_quant": 136.57
+          },
+          "belebele_spa_Latn": {
+            "tokens": 2725,
+            "mean_kl": 0.183704,
+            "ppl_base": 124.6017,
+            "ppl_quant": 128.6979
+          },
+          "belebele_zho_Hans": {
+            "tokens": 2177,
+            "mean_kl": 0.141742,
+            "ppl_base": 404.5101,
+            "ppl_quant": 426.0904
+          },
+          "chat": {
+            "tokens": 220943,
+            "mean_kl": 0.044951,
+            "ppl_base": 4.2233,
+            "ppl_quant": 4.1805
+          },
+          "conversational_agent": {
+            "tokens": 73240,
+            "mean_kl": 2.690117,
+            "ppl_base": 6194.1829,
+            "ppl_quant": 7306.8746
+          },
+          "instruction_following": {
+            "tokens": 41479,
+            "mean_kl": 0.086044,
+            "ppl_base": 7.8094,
+            "ppl_quant": 7.8574
+          },
+          "math": {
+            "tokens": 303481,
+            "mean_kl": 0.136685,
+            "ppl_base": 3.0843,
+            "ppl_quant": 3.1755
+          },
+          "science": {
+            "tokens": 66035,
+            "mean_kl": 0.114973,
+            "ppl_base": 5.5573,
+            "ppl_quant": 5.4246
+          },
+          "swe": {
+            "tokens": 65520,
+            "mean_kl": 1.138099,
+            "ppl_base": 4.2936,
+            "ppl_quant": 4.946
+          },
+          "terminal_agent": {
+            "tokens": 57330,
+            "mean_kl": 0.594921,
+            "ppl_base": 7.6369,
+            "ppl_quant": 9.0987
+          }
+        }
+      },
+      "probe-guard": {
+        "eval_set": "probe-guard.jsonl",
+        "rows": 76,
+        "tokens": 22746,
+        "ppl_base": 61.0805,
+        "ppl_quant": 58.3588,
+        "ppl_delta_pct": -4.456,
+        "mean_kl": 0.133846,
+        "weighted_kl": 0.160425,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 8.3941,
+        "elapsed_s": 19.78,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 988,
+            "mean_kl": 0.137751,
+            "ppl_base": 196.3369,
+            "ppl_quant": 178.4622
+          },
+          "belebele_deu_Latn": {
+            "tokens": 1065,
+            "mean_kl": 0.145691,
+            "ppl_base": 112.0449,
+            "ppl_quant": 111.2512
+          },
+          "belebele_fra_Latn": {
+            "tokens": 1153,
+            "mean_kl": 0.166662,
+            "ppl_base": 117.8634,
+            "ppl_quant": 122.5958
+          },
+          "belebele_hin_Deva": {
+            "tokens": 1682,
+            "mean_kl": 0.144974,
+            "ppl_base": 61.9491,
+            "ppl_quant": 55.1757
+          },
+          "belebele_ita_Latn": {
+            "tokens": 981,
+            "mean_kl": 0.138573,
+            "ppl_base": 128.2332,
+            "ppl_quant": 139.6248
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 885,
+            "mean_kl": 0.23492,
+            "ppl_base": 148.464,
+            "ppl_quant": 128.8955
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 1135,
+            "mean_kl": 0.133551,
+            "ppl_base": 128.6847,
+            "ppl_quant": 134.8415
+          },
+          "belebele_spa_Latn": {
+            "tokens": 956,
+            "mean_kl": 0.165325,
+            "ppl_base": 151.1492,
+            "ppl_quant": 151.6835
+          },
+          "belebele_zho_Hans": {
+            "tokens": 839,
+            "mean_kl": 0.176378,
+            "ppl_base": 552.7534,
+            "ppl_quant": 585.9653
+          },
+          "no_robots": {
+            "tokens": 13062,
+            "mean_kl": 0.116041,
+            "ppl_base": 33.9924,
+            "ppl_quant": 31.8524
+          }
+        }
+      }
+    }
+  },
+  "paired_bootstrap_20000_draws": {
+    "probe-v4": {
+      "Qwen3.8-27B-UD-Q4_K_XL.gguf": {
+        "vs_refreshed_w4a16_hgptq": {
+          "rows": 378,
+          "tokens": 852269,
+          "mean_kl_a": 0.258263,
+          "mean_kl_b": 0.181935,
+          "mean_kl_diff_b_minus_a": -0.076328,
+          "mean_kl_ratio_b_over_a": 0.7045,
+          "ci95_mean_kl_diff": [
+            -0.083743,
+            -0.069768
+          ],
+          "p_a_beats_b_mean_kl": 0.0,
+          "weighted_kl_a": 0.100222,
+          "weighted_kl_b": 0.071418,
+          "weighted_kl_diff_b_minus_a": -0.028805,
+          "weighted_kl_ratio_b_over_a": 0.7126,
+          "ci95_weighted_kl_diff": [
+            -0.032035,
+            -0.025855
+          ],
+          "p_a_beats_b_weighted_kl": 0.0,
+          "row_wins_a": 51,
+          "row_wins_b": 327
+        },
+        "vs_v1_w4a16_hgptq": {
+          "rows": 378,
+          "tokens": 852269,
+          "mean_kl_a": 0.301646,
+          "mean_kl_b": 0.181935,
+          "mean_kl_diff_b_minus_a": -0.119711,
+          "mean_kl_ratio_b_over_a": 0.6031,
+          "ci95_mean_kl_diff": [
+            -0.130413,
+            -0.110256
+          ],
+          "p_a_beats_b_mean_kl": 0.0,
+          "weighted_kl_a": 0.115968,
+          "weighted_kl_b": 0.071418,
+          "weighted_kl_diff_b_minus_a": -0.044551,
+          "weighted_kl_ratio_b_over_a": 0.6158,
+          "ci95_weighted_kl_diff": [
+            -0.049085,
+            -0.040463
+          ],
+          "p_a_beats_b_weighted_kl": 0.0,
+          "row_wins_a": 24,
+          "row_wins_b": 354
+        }
+      },
+      "Qwen3.8-27B-UD-Q4_K_M.gguf": {
+        "vs_refreshed_w4a16_hgptq": {
+          "rows": 378,
+          "tokens": 852269,
+          "mean_kl_a": 0.258263,
+          "mean_kl_b": 0.22018,
+          "mean_kl_diff_b_minus_a": -0.038083,
+          "mean_kl_ratio_b_over_a": 0.8525,
+          "ci95_mean_kl_diff": [
+            -0.043479,
+            -0.033256
+          ],
+          "p_a_beats_b_mean_kl": 0.0,
+          "weighted_kl_a": 0.100222,
+          "weighted_kl_b": 0.085548,
+          "weighted_kl_diff_b_minus_a": -0.014674,
+          "weighted_kl_ratio_b_over_a": 0.8536,
+          "ci95_weighted_kl_diff": [
+            -0.017188,
+            -0.012365
+          ],
+          "p_a_beats_b_weighted_kl": 0.0,
+          "row_wins_a": 129,
+          "row_wins_b": 249
+        },
+        "vs_v1_w4a16_hgptq": {
+          "rows": 378,
+          "tokens": 852269,
+          "mean_kl_a": 0.301646,
+          "mean_kl_b": 0.22018,
+          "mean_kl_diff_b_minus_a": -0.081466,
+          "mean_kl_ratio_b_over_a": 0.7299,
+          "ci95_mean_kl_diff": [
+            -0.089762,
+            -0.074103
+          ],
+          "p_a_beats_b_mean_kl": 0.0,
+          "weighted_kl_a": 0.115968,
+          "weighted_kl_b": 0.085548,
+          "weighted_kl_diff_b_minus_a": -0.03042,
+          "weighted_kl_ratio_b_over_a": 0.7377,
+          "ci95_weighted_kl_diff": [
+            -0.034066,
+            -0.027104
+          ],
+          "p_a_beats_b_weighted_kl": 0.0,
+          "row_wins_a": 77,
+          "row_wins_b": 301
+        }
+      },
+      "Qwen3.8-27B-NVFP4": {
+        "vs_refreshed_w4a16_hgptq": {
+          "rows": 378,
+          "tokens": 852269,
+          "mean_kl_a": 0.258263,
+          "mean_kl_b": 0.436716,
+          "mean_kl_diff_b_minus_a": 0.178453,
+          "mean_kl_ratio_b_over_a": 1.691,
+          "ci95_mean_kl_diff": [
+            0.162992,
+            0.195587
+          ],
+          "p_a_beats_b_mean_kl": 1.0,
+          "weighted_kl_a": 0.100222,
+          "weighted_kl_b": 0.18048,
+          "weighted_kl_diff_b_minus_a": 0.080258,
+          "weighted_kl_ratio_b_over_a": 1.8008,
+          "ci95_weighted_kl_diff": [
+            0.073506,
+            0.087961
+          ],
+          "p_a_beats_b_weighted_kl": 1.0,
+          "row_wins_a": 378,
+          "row_wins_b": 0
+        },
+        "vs_v1_w4a16_hgptq": {
+          "rows": 378,
+          "tokens": 852269,
+          "mean_kl_a": 0.301646,
+          "mean_kl_b": 0.436716,
+          "mean_kl_diff_b_minus_a": 0.13507,
+          "mean_kl_ratio_b_over_a": 1.4478,
+          "ci95_mean_kl_diff": [
+            0.12227,
+            0.149316
+          ],
+          "p_a_beats_b_mean_kl": 1.0,
+          "weighted_kl_a": 0.115968,
+          "weighted_kl_b": 0.18048,
+          "weighted_kl_diff_b_minus_a": 0.064512,
+          "weighted_kl_ratio_b_over_a": 1.5563,
+          "ci95_weighted_kl_diff": [
+            0.058746,
+            0.071053
+          ],
+          "p_a_beats_b_weighted_kl": 1.0,
+          "row_wins_a": 373,
+          "row_wins_b": 5
+        }
+      }
+    },
+    "probe-guard": {
+      "Qwen3.8-27B-UD-Q4_K_XL.gguf": {
+        "vs_refreshed_w4a16_hgptq": {
+          "rows": 76,
+          "tokens": 22746,
+          "mean_kl_a": 0.052982,
+          "mean_kl_b": 0.041805,
+          "mean_kl_diff_b_minus_a": -0.011177,
+          "mean_kl_ratio_b_over_a": 0.789,
+          "ci95_mean_kl_diff": [
+            -0.016346,
+            -0.006096
+          ],
+          "p_a_beats_b_mean_kl": 0.0,
+          "weighted_kl_a": 0.073907,
+          "weighted_kl_b": 0.056624,
+          "weighted_kl_diff_b_minus_a": -0.017283,
+          "weighted_kl_ratio_b_over_a": 0.7662,
+          "ci95_weighted_kl_diff": [
+            -0.027612,
+            -0.007105
+          ],
+          "p_a_beats_b_weighted_kl": 0.0002,
+          "row_wins_a": 14,
+          "row_wins_b": 62
+        },
+        "vs_v1_w4a16_hgptq": {
+          "rows": 76,
+          "tokens": 22746,
+          "mean_kl_a": 0.063923,
+          "mean_kl_b": 0.041805,
+          "mean_kl_diff_b_minus_a": -0.022118,
+          "mean_kl_ratio_b_over_a": 0.654,
+          "ci95_mean_kl_diff": [
+            -0.027425,
+            -0.016906
+          ],
+          "p_a_beats_b_mean_kl": 0.0,
+          "weighted_kl_a": 0.081058,
+          "weighted_kl_b": 0.056624,
+          "weighted_kl_diff_b_minus_a": -0.024433,
+          "weighted_kl_ratio_b_over_a": 0.6986,
+          "ci95_weighted_kl_diff": [
+            -0.034681,
+            -0.01416
+          ],
+          "p_a_beats_b_weighted_kl": 0.0,
+          "row_wins_a": 7,
+          "row_wins_b": 69
+        }
+      },
+      "Qwen3.8-27B-UD-Q4_K_M.gguf": {
+        "vs_refreshed_w4a16_hgptq": {
+          "rows": 76,
+          "tokens": 22746,
+          "mean_kl_a": 0.052982,
+          "mean_kl_b": 0.049592,
+          "mean_kl_diff_b_minus_a": -0.00339,
+          "mean_kl_ratio_b_over_a": 0.936,
+          "ci95_mean_kl_diff": [
+            -0.008605,
+            0.002452
+          ],
+          "p_a_beats_b_mean_kl": 0.12115,
+          "weighted_kl_a": 0.073907,
+          "weighted_kl_b": 0.071849,
+          "weighted_kl_diff_b_minus_a": -0.002058,
+          "weighted_kl_ratio_b_over_a": 0.9722,
+          "ci95_weighted_kl_diff": [
+            -0.013807,
+            0.011007
+          ],
+          "p_a_beats_b_weighted_kl": 0.36315,
+          "row_wins_a": 34,
+          "row_wins_b": 42
+        },
+        "vs_v1_w4a16_hgptq": {
+          "rows": 76,
+          "tokens": 22746,
+          "mean_kl_a": 0.063923,
+          "mean_kl_b": 0.049592,
+          "mean_kl_diff_b_minus_a": -0.014331,
+          "mean_kl_ratio_b_over_a": 0.7758,
+          "ci95_mean_kl_diff": [
+            -0.020596,
+            -0.007632
+          ],
+          "p_a_beats_b_mean_kl": 5e-05,
+          "weighted_kl_a": 0.081058,
+          "weighted_kl_b": 0.071849,
+          "weighted_kl_diff_b_minus_a": -0.009209,
+          "weighted_kl_ratio_b_over_a": 0.8864,
+          "ci95_weighted_kl_diff": [
+            -0.022042,
+            0.004791
+          ],
+          "p_a_beats_b_weighted_kl": 0.09555,
+          "row_wins_a": 20,
+          "row_wins_b": 56
+        }
+      },
+      "Qwen3.8-27B-NVFP4": {
+        "vs_refreshed_w4a16_hgptq": {
+          "rows": 76,
+          "tokens": 22746,
+          "mean_kl_a": 0.052982,
+          "mean_kl_b": 0.133846,
+          "mean_kl_diff_b_minus_a": 0.080864,
+          "mean_kl_ratio_b_over_a": 2.5262,
+          "ci95_mean_kl_diff": [
+            0.074137,
+            0.088139
+          ],
+          "p_a_beats_b_mean_kl": 1.0,
+          "weighted_kl_a": 0.073907,
+          "weighted_kl_b": 0.160425,
+          "weighted_kl_diff_b_minus_a": 0.086518,
+          "weighted_kl_ratio_b_over_a": 2.1706,
+          "ci95_weighted_kl_diff": [
+            0.073121,
+            0.102017
+          ],
+          "p_a_beats_b_weighted_kl": 1.0,
+          "row_wins_a": 76,
+          "row_wins_b": 0
+        },
+        "vs_v1_w4a16_hgptq": {
+          "rows": 76,
+          "tokens": 22746,
+          "mean_kl_a": 0.063923,
+          "mean_kl_b": 0.133846,
+          "mean_kl_diff_b_minus_a": 0.069923,
+          "mean_kl_ratio_b_over_a": 2.0939,
+          "ci95_mean_kl_diff": [
+            0.062945,
+            0.077521
+          ],
+          "p_a_beats_b_mean_kl": 1.0,
+          "weighted_kl_a": 0.081058,
+          "weighted_kl_b": 0.160425,
+          "weighted_kl_diff_b_minus_a": 0.079367,
+          "weighted_kl_ratio_b_over_a": 1.9791,
+          "ci95_weighted_kl_diff": [
+            0.065819,
+            0.095163
+          ],
+          "p_a_beats_b_weighted_kl": 1.0,
+          "row_wins_a": 74,
+          "row_wins_b": 2
+        }
+      }
+    }
+  }
+}

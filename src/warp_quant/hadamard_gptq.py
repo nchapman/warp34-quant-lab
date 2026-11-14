@@ -27,7 +27,7 @@ from transformers import AutoProcessor
 
 from warp_quant.cachepath import resolve_snapshot
 from warp_quant.lablog import log_event, run_done, run_fail
-from warp_quant.models import model_class, quant_recipe, resolve
+from warp_quant.models import gguf_model_class, model_class, quant_recipe, resolve
 from warp_quant.stamp import (
     build_generation_config,
     check_template_renders,
@@ -1437,11 +1437,97 @@ def _load_moe_quant_model_direct(path: Path, device: str) -> nn.Module:
     return model
 
 
-def load_quant_model_with_transforms(path: str | Path, device: str = "cuda:0") -> nn.Module:
-    """Load a compressed-tensors checkpoint, decompress INT4 weights, and attach online transforms."""
+def _load_gguf_model_for_probe(
+    gguf_path: Path,
+    base_dir: Path | None,
+    base_tokenizer,
+    device: str = "cuda:0",
+) -> nn.Module:
+    """Load a GGUF checkpoint via Transformers GgufConfig(dequantize=True) with strict base guards."""
+    if base_dir is None or not Path(base_dir).is_dir():
+        raise ValueError("Loading a GGUF probe target requires a pinned local base_dir directory")
+    if base_tokenizer is None:
+        raise ValueError("Loading a GGUF probe target requires base_tokenizer for ID validation")
+    from transformers import AutoConfig, AutoTokenizer, GgufConfig
+
+    base_config = AutoConfig.from_pretrained(str(base_dir), local_files_only=True)
+    base_text_config = getattr(base_config, "text_config", base_config)
+    expected_vocab_size = getattr(base_text_config, "vocab_size", None)
+    gguf_tokenizer = AutoTokenizer.from_pretrained(
+        str(base_dir), gguf_file=str(gguf_path), local_files_only=True
+    )
+    if len(gguf_tokenizer) < len(base_tokenizer) or (
+        expected_vocab_size is not None and len(gguf_tokenizer) > expected_vocab_size
+    ):
+        raise ValueError(
+            f"GGUF tokenizer has {len(gguf_tokenizer)} IDs; expected between "
+            f"{len(base_tokenizer)} (base tokenizer) and {expected_vocab_size} (text vocab_size)"
+        )
+    for token_id in range(len(base_tokenizer)):
+        base_token = base_tokenizer.convert_ids_to_tokens(token_id)
+        gguf_token = gguf_tokenizer.convert_ids_to_tokens(token_id)
+        if base_token != gguf_token:
+            raise ValueError(f"GGUF token ID {token_id} maps to {gguf_token!r}; base maps to {base_token!r}")
+
+    dev_obj = torch.device(device)
+    load_dtype = torch.float32
+    if dev_obj.type == "cuda":
+        # A 27B model in fp32 requires ~108 GB; fall back to bf16 if free VRAM is under 115 GiB
+        base_text_cfg = getattr(base_config, "text_config", base_config)
+        n_layers = getattr(base_text_cfg, "num_hidden_layers", 32)
+        h_size = getattr(base_text_cfg, "hidden_size", 4096)
+        if n_layers >= 48 and h_size >= 4096 and _available_cuda_bytes(dev_obj) < 115 * (1024**3):
+            load_dtype = torch.bfloat16
+
+    model_cls = gguf_model_class(str(base_dir))
+    model = model_cls.from_pretrained(
+        str(base_dir),
+        gguf_file=str(gguf_path),
+        quantization_config=GgufConfig(gguf_file=str(gguf_path), dequantize=True),
+        dtype=load_dtype,
+        device_map={"": device},
+        local_files_only=True,
+    )
+    model.eval()
+    expected_text_type = {
+        "qwen3_5": "qwen3_5_text",
+        "qwen3_5_text": "qwen3_5_text",
+        "qwen3_5_moe": "qwen3_5_moe_text",
+        "qwen3_5_moe_text": "qwen3_5_moe_text",
+    }.get(base_config.model_type)
+    if model.config.model_type != expected_text_type:
+        raise ValueError(
+            f"GGUF text model type {model.config.model_type!r} does not match "
+            f"the {base_config.model_type!r} base family (expected {expected_text_type!r})"
+        )
+    base_text_config = getattr(base_config, "text_config", base_config)
+    expected_vocab_size = getattr(base_text_config, "vocab_size", None)
+    output_vocab_size = model.get_output_embeddings().weight.shape[0]
+    if expected_vocab_size is None or output_vocab_size != expected_vocab_size:
+        raise ValueError(
+            f"GGUF output vocab has {output_vocab_size} IDs; base text config has {expected_vocab_size}"
+        )
+    return model
+
+
+def load_quant_model_with_transforms(
+    path: str | Path,
+    device: str = "cuda:0",
+    *,
+    base_dir: str | Path | None = None,
+    base_tokenizer=None,
+) -> nn.Module:
+    """Load a compressed-tensors or GGUF checkpoint, decompress weights, and attach online transforms."""
     from compressed_tensors.transform import TransformConfig, TransformScheme, apply_transform_config
 
     path = Path(path)
+    if path.suffix.lower() == ".gguf":
+        return _load_gguf_model_for_probe(
+            path,
+            Path(base_dir) if base_dir is not None else None,
+            base_tokenizer,
+            device=device,
+        )
     raw_cfg = json.loads((path / "config.json").read_text())
     cls = model_class(str(path))
     if cls.__name__ == "Qwen3_5MoeForConditionalGeneration":
@@ -1881,10 +1967,12 @@ def _run_pair_low_mem(
     tok_kls = []
     row_dump = []
     dom = defaultdict(lambda: {"base": 0.0, "quant": 0.0, "count": 0, "kl": 0.0, "kl_n": 0})
-    dev = next(base.parameters()).device
+    dev = next(quant.parameters()).device
     high_vram = dev.type == "cuda" and _available_cuda_bytes(dev) > 36 * (1024**3)
     eff_chunk = 2048 if high_vram else CHUNK
     base_lm_head = base.get_output_embeddings()
+    if base_hidden_cache is not None and base_lm_head is not None:
+        base_lm_head.to(dev)
 
     for i, (domain, ids) in enumerate(batches):
         ids = ids.to(dev)
@@ -2015,7 +2103,8 @@ def run_probe(args: argparse.Namespace) -> None:
     torch.cuda.empty_cache()
 
     eval_batches_by_set: list[tuple[Path, list[tuple[str, torch.Tensor]], list[torch.Tensor] | None]] = []
-    cache_base_hidden = len(quant_dirs) > 1
+    has_gguf = any(qd.suffix.lower() == ".gguf" for qd in quant_dirs)
+    cache_base_hidden = len(quant_dirs) > 1 or has_gguf
     for eval_path_str in args.eval_sets:
         eval_path = Path(eval_path_str)
         if not eval_path.is_absolute():
@@ -2031,6 +2120,19 @@ def run_probe(args: argparse.Namespace) -> None:
             ]
         eval_batches_by_set.append((eval_path, batches, b_hidden))
 
+    if (
+        cache_base_hidden
+        and hasattr(base_model, "model")
+        and not args.eval_mtp
+        and not args.eval_vision
+        and not getattr(args, "eval_vision_guard", None)
+    ):
+        lm_head_mod = base_model.get_output_embeddings()
+        base_model.model.to("cpu")
+        if lm_head_mod is not None:
+            lm_head_mod.to("cuda:0")
+        torch.cuda.empty_cache()
+
     for quant_dir in quant_dirs:
         log_event(
             "ROT_PROBE_START",
@@ -2040,7 +2142,12 @@ def run_probe(args: argparse.Namespace) -> None:
             eval_sets=args.eval_sets,
             eval_mtp=args.eval_mtp,
         )
-        quant_model = load_quant_model_with_transforms(quant_dir, device="cuda:0")
+        quant_model = load_quant_model_with_transforms(
+            quant_dir,
+            device="cuda:0",
+            base_dir=base_dir,
+            base_tokenizer=processor.tokenizer,
+        )
         torch.cuda.empty_cache()
         results: dict[str, dict] = {}
 

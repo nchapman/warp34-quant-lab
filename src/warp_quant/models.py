@@ -641,6 +641,22 @@ def model_class(hub_id: str):
     raise ValueError(f"unsupported model_type {model_type!r} for {hub_id}")
 
 
+def gguf_model_class(base_path: str):
+    """Resolve the text-only Transformers class for a Qwen GGUF target."""
+    from transformers import AutoConfig
+
+    model_type = AutoConfig.from_pretrained(base_path).model_type
+    if model_type == "qwen3_5_moe":
+        from transformers import Qwen3_5MoeForCausalLM
+
+        return Qwen3_5MoeForCausalLM
+    if model_type in ("qwen3_5", "qwen3_5_text"):
+        from transformers import Qwen3_5ForCausalLM
+
+        return Qwen3_5ForCausalLM
+    raise ValueError(f"unsupported GGUF base model_type {model_type!r} for {base_path}")
+
+
 def get(key: str) -> dict[str, Any] | None:
     if key in MODELS:
         return MODELS[key]
