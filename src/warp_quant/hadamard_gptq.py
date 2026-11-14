@@ -1571,6 +1571,22 @@ def load_quant_model_with_transforms(
     return model
 
 
+@torch.no_grad()
+def fuse_quant_model_for_generation(model: nn.Module) -> int:
+    """Fold online Walsh-Hadamard input rotations into decompressed Linear weights for fast batched generation."""
+    fused_count = 0
+    for name, mod in model.named_modules():
+        if isinstance(mod, nn.Linear):
+            if hasattr(mod, "_forward_pre_hooks") and len(mod._forward_pre_hooks) > 0:
+                head_dim = 16 if "visual.blocks." in name and name.endswith("mlp.linear_fc2") else 64
+                mod.weight.data = _hadamard_rotate_weight(mod.weight.data, head_dim).to(mod.weight.dtype)
+                mod._forward_pre_hooks.clear()
+                fused_count += 1
+            if "forward" in mod.__dict__:
+                del mod.__dict__["forward"]
+    return fused_count
+
+
 def _apply_rco_code_offsets(model: nn.Module, path: Path) -> None:
     """Apply half-integer code offsets recorded in rco_manifest.json after CT weight decompression."""
     rco_manifest_path = path / "rco_manifest.json"

@@ -73,3 +73,7 @@ run = "uv run --no-sync warp-quant probe"
 description = "Extract an unrotated BF16 Heretic abliteration LoRA adapter for vLLM & PEFT (pass CLI args after `--`)"
 run = "uv run --no-sync warp-quant heretic-lora"
 
+[tasks.eval]
+description = "Run EvalScope downstream capability benchmarks against an OpenAI-compatible server (pass CLI args after `--`)"
+run = "uv run --no-sync warp-quant eval"
+

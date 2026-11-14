@@ -284,6 +284,54 @@ def build_parser() -> argparse.ArgumentParser:
     h.add_argument("--device-map", default="auto")
     h.add_argument("--seed", type=int, default=42)
 
+    e = sub.add_parser(
+        "eval",
+        help="Run EvalScope downstream capability benchmarks (ifeval, math_500, gpqa_diamond, humaneval_plus, live_code_bench) against an OpenAI-compatible server",
+    )
+    e.add_argument("--model", required=True, help="Deployed model identifier on the OpenAI server")
+    e.add_argument(
+        "--api-url",
+        default="http://127.0.0.1:8000/v1",
+        help="OpenAI-compatible server base URL (vLLM or llama-server)",
+    )
+    e.add_argument("--api-key", default="EMPTY")
+    e.add_argument(
+        "--datasets",
+        nargs="+",
+        default=["ifeval", "math_500", "gpqa_diamond"],
+        help="EvalScope datasets to evaluate",
+    )
+    e.add_argument("--output-dir", required=True, help="Directory for EvalScope reports and reviews")
+    e.add_argument("--batch-size", type=int, default=64, help="Concurrent evaluation requests")
+    e.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="Max output tokens (default: 16384 thinking, 4096 non-thinking)",
+    )
+    e.add_argument("--temperature", type=float, default=0.6)
+    e.add_argument("--top-p", type=float, default=0.95)
+    e.add_argument("--top-k", type=int, default=20)
+    e.add_argument("--presence-penalty", type=float, default=None)
+    e.add_argument(
+        "--thinking",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable Qwen thinking mode (or pass --no-thinking to disable via chat_template_kwargs)",
+    )
+    e.add_argument(
+        "--remove-thinking-tag",
+        default="</think>",
+        help="Closing thinking tag to strip before answer extraction ('none' to disable)",
+    )
+    e.add_argument(
+        "--math-levels", nargs="*", default=None, help="Optional MATH-500 subset levels (e.g. 'Level 5')"
+    )
+    e.add_argument("--limit", type=int, default=None, help="Optional per-dataset sample limit")
+    e.add_argument("--seed", type=int, default=42)
+    e.add_argument("--timeout", type=int, default=60000)
+    e.add_argument("--stream", action=argparse.BooleanOptionalAction, default=True)
+
     return parser
 
 
@@ -307,6 +355,10 @@ def main(argv: list[str] | None = None) -> None:
             from warp_quant.heretic_lora import run_heretic_lora
 
             run_heretic_lora(args)
+        elif args.cmd == "eval":
+            from warp_quant.evalscope_runner import run_evalscope_cli
+
+            run_evalscope_cli(args)
     except BaseException as exc:
         run_fail(error=str(exc))
         raise
