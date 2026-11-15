@@ -1,4 +1,4 @@
-# warp-34-quant-lab
+# warp34-quant-lab
 
 **Full-model 4-bit (`W4A16-HGPTQ`) quantizations of the Qwen 3.5 / 3.6 / 3.8 family—including the Vision encoder and the built-in Multi-Token Prediction (MTP) speculative draft head.**
 

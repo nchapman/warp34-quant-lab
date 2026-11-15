@@ -1,4 +1,4 @@
-# warp-34-quant-lab
+# warp34-quant-lab
 
 `W4A16-HGPTQ` (`g64-h64` Walsh–Hadamard rotation + Cholesky GPTQ + 4-bit `Custom-LUT4` `W_kv`-HGPTQ PLE) quantization and teacher-forced fidelity probing for Qwen3.5 / Qwen3.6 / Qwen3.8 (`0.8B`–`27B` dense, `35B-A3B` MoE, `Qwen3.8-Flash-Next`). Deeper architecture notes and measured receipts live in `README.md` and `results/`.
 

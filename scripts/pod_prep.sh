@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# scripts/pod_prep.sh — Prepare a remote RunPod GPU pod for warp-34-quant-lab.
+# scripts/pod_prep.sh — Prepare a remote RunPod GPU pod for warp34-quant-lab.
 #
 # Usage:
 #   bash scripts/pod_prep.sh <ssh_target> [remote_dir]
-#   SSH_PORT=12345 bash scripts/pod_prep.sh root@1.2.3.4 /workspace/warp-34-quant-lab
+#   SSH_PORT=12345 bash scripts/pod_prep.sh root@1.2.3.4 /workspace/warp34-quant-lab
 #
 # Steps (idempotent):
 #   1. Survey GPU, CUDA, disk, RAM, and install uv if missing
@@ -20,7 +20,7 @@ if [[ $# -lt 1 ]]; then
 fi
 
 SSH_TARGET="$1"
-REMOTE_DIR="${2:-/root/warp-34-quant-lab}"
+REMOTE_DIR="${2:-/root/warp34-quant-lab}"
 SSH_PORT="${SSH_PORT:-}"
 SSH_KEY="${SSH_KEY:-}"
 
@@ -67,7 +67,7 @@ else
     echo "WARNING: No local HF_TOKEN found; skipping token upload" >&2
 fi
 
-echo "=== [3/6] Syncing warp-34-quant-lab -> $SSH_TARGET:$REMOTE_DIR ==="
+echo "=== [3/6] Syncing warp34-quant-lab -> $SSH_TARGET:$REMOTE_DIR ==="
 RSYNC_RSH="ssh ${SSH_OPTS[*]}"
 rsync -az --no-owner --no-group --delete \
     -e "$RSYNC_RSH" \

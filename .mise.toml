@@ -1,4 +1,4 @@
-# mise config: tool versions + task runner for warp-34-quant-lab
+# mise config: tool versions + task runner for warp34-quant-lab
 # Usage:
 #   mise run setup          # create/sync .venv with uv
 #   mise run setup-kernels  # compile GPU GDN kernels (causal-conv1d + flash-linear-attention)
