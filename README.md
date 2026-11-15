@@ -16,7 +16,7 @@ This project takes a different approach: **every part of the model is calibrated
   - Standard 4-bit quantizers struggle when a few weight or activation channels have huge outlier spikes. Before quantizing to 4-bit, we apply a fast mathematical rotation (a block Walsh–Hadamard transform) that spreads outliers evenly across 64-weight groups, then run Cholesky GPTQ to compensate for rounding error. That cuts overall divergence from 16-bit by **~30%** (and worst-case tail spikes by **up to 64%**) compared to standard 4-bit GPTQ.
 - **Salvaged & trajectory-calibrated speculative + diffusion quantization:**
   - **Salvaged Native MTP:** `NousResearch/Arete-27B` shipped without `mtp.*` weights. Because its embedding matrix is bit-identical to `Qwen/Qwen3.8-27B`, we graft the donor MTP head, calibrate it on Arete Layer-63 hidden states, and restore speculative decoding with **96.47% isolated / 88.69% E2E Top-1 agreement**.
-  - **Full diffusion pipelines at 4-bit:** `Qwen/Qwen-Image-2.1` and `Qwen-Image-2.1-Turbo` (8.77B `Qwen3VL` text encoder + 7.12B single-stream DiT + VAE, `32.45 GiB → 9.82 GiB`, `3.31×`) are quantized with trajectory-calibrated block-by-block DiT HGPTQ + Layer-35 unnormalized-hidden-state Norm QAT, retaining **`0.9988` teacher-forced velocity cosine** and **`23.1 dB` end-to-end decoded-image PSNR** vs. the BF16 pipeline.
+  - **Full diffusion pipelines at 4-bit:** `Qwen/Qwen-Image-2.1` and `Qwen-Image-2.1-Turbo` (8.77B `Qwen3VL` text encoder + 7.12B single-stream DiT + VAE, `32.45 GiB → 9.82 GiB`, `3.31×`) are quantized with multimodal DeepStack + multi-aspect-ratio T2I/TI2I trajectory-calibrated DiT HGPTQ and Layer-35 Norm / Block-31 Velocity QK-Norm QAT (`image-gen-calib-v1`), retaining **`0.9991–0.9994` teacher-forced velocity cosine (`28.85–30.42 dB` SQNR)** and **`25.46–26.97 dB` end-to-end decoded-image PSNR (`36.5–36.6 dB` on TI2I editing)** vs. the BF16 pipeline.
 - **Giant MoE & N-Gram models that actually fit on real hardware:**
   - On `Qwen3.6-35B-A3B` (`67.0 GiB → 18.78 GiB` in `W4A16-HGPTQ` for 24 GB cards, or **`13.15 GiB` in `W2.6A16-HGPTQ-RCO` for a single 16 GB GPU**) and the 180B-class `Qwen3.8-Flash-Next` (`335.3 GiB → 92.84 GiB` in `W4A16-HGPTQ`, or **`44.93 GiB` trunk / `71.75 GiB` total in `W2.6A16-HGPTQ-RCO` for a 48 GB or 80 GB GPU**), we rotate and quantize all routed *and* shared MoE experts, compress `Flash-Next`’s massive `102.4 GB` N-gram lookup table down to `26.8 GiB` using a custom 4-bit lookup table tailored to its downstream projections, and bundle **pre-computed hot-expert rankings** (`static_hot_cache_rankings.json`) so inference engines know which experts to pin in GPU VRAM from the very first token.
 
@@ -61,12 +61,12 @@ All 22 checkpoints (`13` `W4A16-HGPTQ`, `7` sub-3-bit `HGPTQ-RCO`, and `2` `DFla
 
 ### Diffusion Image-Generation Checkpoints (`W4A16-HGPTQ`)
 
-Full-pipeline 4-bit quantizations of the `16B` Qwen-Image-2.1 text-to-image / image-to-image models (`8.77B` `Qwen3VL` text encoder + `7.12B` single-stream 3D-RoPE DiT + `0.63 GiB` BF16 VAE; `32.45 GiB → 9.82 GiB`, `3.31×`). The DiT is calibrated on real FlowMatch denoising trajectories captured at the entry to `transformer_blocks[0]`; the text encoder targets the unnormalized Layer-35 hidden states the pipeline actually consumes. Fidelity is measured both teacher-forced (per-step velocity vs. the BF16 DiT) and end-to-end (full multi-step trajectory with identical seeds, decoded to RGB PSNR):
+Full-pipeline 4-bit quantizations of the `16B` Qwen-Image-2.1 text-to-image / image-to-image models (`8.77B` `Qwen3VL` text encoder + `7.12B` single-stream 3D-RoPE DiT + `0.63 GiB` BF16 VAE; `32.45 GiB → 9.82 GiB`, `3.31×`). Calibrated and evaluated on strictly disjoint, commit-pinned bilingual EN+ZH T2I/TI2I splits (`image-gen-{calib,probe,guard}-v1`: `OneIG-Bench` EN/ZH, `DPG-Bench`, `PartiPrompts`, `GEdit-Bench` EN/ZH TI2I, and `MagicBrush` OOD guard) across 5 canonical aspect ratios (`1024×1024`, `1344×768`, `768×1344`, `1152×896`, `896×1152`). The `Qwen3VL` vision tower is calibrated first so post-quantized Vision + DeepStack (`_deepstack_process`) + 3D M-RoPE features flow through all 36 decoder layers during sequential GPTQ and 160-step Layer-35 Norm QAT; the DiT is calibrated on 32 T2I+TI2I FlowMatch trajectories (`128` states) + 160-step Velocity QK-Norm QAT:
 
-| Base Model | Artifact (`nchapman/*`) | Size | Text-Encoder Prompt-Embeds Cosine (SQNR) | Teacher-Forced Velocity Cosine (SQNR) | E2E Latent Cosine (SQNR) | Decoded Image PSNR |
-|---|---|---:|---:|---:|---:|---:|
-| `Qwen/Qwen-Image-2.1-Turbo` | [`Qwen-Image-2.1-Turbo-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen-Image-2.1-Turbo-W4A16-HGPTQ) ([card](results/qwen-image-21-turbo-w4a16-hgptq/README.md)) | `9.82 GiB` | `0.9514` (`13.58 dB`) | `0.9988` (`26.99 dB`) | `0.9648` (`16.50 dB`) | `23.15 dB` |
-| `Qwen/Qwen-Image-2.1` | [`Qwen-Image-2.1-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen-Image-2.1-W4A16-HGPTQ) ([card](results/qwen-image-21-w4a16-hgptq/README.md)) | `9.82 GiB` | `0.9512` (`13.52 dB`) | `0.9986` (`26.61 dB`) | `0.9799` (`15.44 dB`) | `23.09 dB` |
+| Base Model | Artifact (`nchapman/*`) | Size | `txt_in` Conditioning Cosine (`T2I` Prompt-Embeds) | Teacher-Forced Velocity Cosine (SQNR) | Guard Velocity Cosine (SQNR) | E2E Latent Cosine (SQNR) | Decoded Image PSNR (`All` / `TI2I` / `Guard`) |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `Qwen/Qwen-Image-2.1-Turbo` | [`Qwen-Image-2.1-Turbo-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen-Image-2.1-Turbo-W4A16-HGPTQ) ([card](results/qwen-image-21-turbo-w4a16-hgptq/README.md)) | `9.82 GiB` | `0.9996` (`0.9922` / `18.21 dB`) | `0.9994` (`30.42 dB`) | `0.9992` (`29.29 dB`) | `0.9782` (`16.09 dB`) | `25.46 dB` (`36.53` / `27.25 dB`) |
+| `Qwen/Qwen-Image-2.1` | [`Qwen-Image-2.1-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen-Image-2.1-W4A16-HGPTQ) ([card](results/qwen-image-21-w4a16-hgptq/README.md)) | `9.82 GiB` | `0.9996` (`0.9922` / `18.20 dB`) | `0.9991` (`28.85 dB`) | `0.9988` (`27.62 dB`) | `0.9893` (`19.02 dB`) | `26.97 dB` (`36.61` / `27.03 dB`) |
 
 ---
 
@@ -88,16 +88,20 @@ mise run verify-data
 mise run check
 ```
 
-### Materialize Vision Fixtures (`vision-calib-v2`, `vision-probe-v2`, `vision-guard-v2`)
+### Materialize Vision & Image-Generation Fixtures (`vision-*-v2`, `image-gen-*-v1`)
 
 ```bash
 mise run build-vision-data
+mise run build-image-data
 ```
 
-Downloads pinned Hugging Face dataset Parquet shards and deterministically materializes three strictly disjoint image sets under `data/`:
+Downloads pinned Hugging Face dataset Parquet/Arrow shards and deterministically materializes strictly disjoint calibration, probe, and OOD guard sets under `data/`:
 - `data/vision-calib-v2` — 120 images across 12 VQA/OCR/chart/reasoning domains (`calibration=true`)
 - `data/vision-probe-v2` — 96 held-out in-distribution evaluation images across 12 domains (`calibration=false`)
 - `data/vision-guard-v2` — 48 held-out out-of-distribution UI/ScreenSpot/Math guard images (`guard=true`)
+- `data/image-gen-calib-v1` — 96 EN+ZH T2I/TI2I rows across 16 domains (`72` T2I + `24` TI2I, `calibration=true`)
+- `data/image-gen-probe-v1` — 64 held-out EN+ZH T2I/TI2I rows across 16 domains (`48` T2I + `16` TI2I, `calibration=false`)
+- `data/image-gen-guard-v1` — 24 held-out OOD T2I/TI2I rows across 6 unseen domains (`16` T2I + `8` TI2I, `guard=true`)
 
 ### Quantize & Probe
 

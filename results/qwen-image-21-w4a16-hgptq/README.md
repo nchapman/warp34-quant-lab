@@ -16,30 +16,39 @@ tags:
   - w4a16
 ---
 
-# Qwen-Image-2.1 — W4A16-HGPTQ (`g64-h64` + Trajectory DiT HGPTQ + Norm/Velocity QAT)
+# Qwen-Image-2.1 — W4A16-HGPTQ (`g64-h64` + Multimodal DeepStack/Trajectory HGPTQ + Norm/Velocity QAT)
 
 This repository contains a **9.82 GiB** (`3.31×` compressed from `32.45 GiB` BF16) **`W4A16-HGPTQ`** quantization of [`Qwen/Qwen-Image-2.1`](https://huggingface.co/Qwen/Qwen-Image-2.1) (`d26bb61231c349cf6b7896fa83353113880e1ba3`) produced with [`warp-quant`](https://github.com/nchapman/warp34-quant-lab).
 
 ## Recipe Summary
 
-| Submodule | Architecture | Quantization Scheme | Size |
+| Submodule | Architecture | Quantization & Calibration Scheme | Size |
 | :--- | :--- | :--- | ---: |
-| `text_encoder/` | `Qwen3VLForConditionalGeneration` (36 decoder layers + 27 ViT blocks + `merger` + `deepstack_merger_list.0..2`) | `W4_g64` + $H_{64}$ online Hadamard (`g0_text`, `g2_vision`), per-channel $H_{16}$ on `visual.blocks.*.mlp.linear_fc2` ($K=4304$), unrotated `W8_g64` `lm_head`, + 120-step Layer-35 unnormalized hidden-state Norm QAT (`-24.7%` val MSE) | `5.44 GiB` |
-| `transformer/` | `QwenImage21Transformer2DModel` (32 single-stream 3D-RoPE DiT blocks = 224 linears; `img_in`, `txt_in`, `proj_out`, `time_text_embed`, `modulation.1`, `norm_out.linear` kept in BF16) | Trajectory-calibrated sequential block-by-block `W4_g64` + $H_{64}$ online Hadamard (`g0_dit`) + 120-step Block-31 Velocity QK-Norm QAT | `3.75 GiB` |
+| `text_encoder/` | `Qwen3VLForConditionalGeneration` (36 decoder layers + 27 ViT blocks + `merger` + `deepstack_merger_list.0..2`) | `W4_g64` + $H_{64}$ online Hadamard (`group_0`), per-channel $H_{16}$ on `visual.blocks.*.mlp.linear_fc2` ($K=4304$), unrotated `W8_g64` `lm_head`; Vision calibrated on `60` images (`24` `image-gen-calib-v1` TI2I + `36` `vision-calib-v2`), then post-quantized Vision + DeepStack (`_deepstack_process`) + 3D M-RoPE propagated through all 36 `Qwen3VL` decoder layers (`256` EN+ZH T2I/TI2I/text sequences) + 160-step Layer-35 Norm QAT (`-7.08%` val MSE) | `5.44 GiB` |
+| `transformer/` | `QwenImage21Transformer2DModel` (32 single-stream 3D-RoPE DiT blocks = 224 linears; `img_in`, `txt_in`, `proj_out`, `time_text_embed`, `modulation.1`, `norm_out.linear` kept in BF16) | Sequential block-by-block `W4_g64` + $H_{64}$ online Hadamard (`group_0`) calibrated on `32` multi-aspect-ratio T2I+TI2I trajectories (`128` states across 5 aspect ratios & VAE condition-image prefixes) + 160-step Block-31 Velocity QK-Norm QAT (`-0.30%` val MSE) | `3.75 GiB` |
 | `vae/` | `AutoencoderKLQwenImage21` | Unmodified `BF16` | `0.63 GiB` |
 | **Total** | Full 16B T2I + TI2I Pipeline | **`compressed-tensors` `pack-quantized`** | **`9.82 GiB`** |
 
+## Dataset-Backed Calibration & Evaluation Suite (`image-gen-v1`)
+
+Calibrated and evaluated on strictly disjoint, commit-pinned splits (`OneIG-Bench` `f80e6317` EN+ZH, `DPG-Bench` `f7f1626d`, `PartiPrompts` `944b156a`, `GEdit-Bench` `50766778` EN+ZH TI2I, and `MagicBrush` `6c254560` OOD guard) across 5 canonical 32-aligned aspect ratios (`1024×1024`, `1344×768`, `768×1344`, `1152×896`, `896×1152`):
+
+- **Calibration (`data/image-gen-calib-v1`)**: `96` rows (`16` domains × `6`: `72` T2I + `24` TI2I, `54` EN + `42` ZH)
+- **Held-Out Probe (`data/image-gen-probe-v1`)**: `64` rows (`16` domains × `4`: `48` T2I + `16` TI2I, `36` EN + `28` ZH)
+- **Held-Out OOD Guard (`data/image-gen-guard-v1`)**: `24` rows (`6` unseen domains × `4`: `16` T2I + `8` TI2I, `22` EN + `2` ZH)
+
 ## Teacher-Forced & Trajectory Fidelity Receipt
 
-Evaluated against the unmodified `BF16` `Qwen/Qwen-Image-2.1` pipeline across held-out text-to-image (`T2I`) and reference-image editing (`TI2I`, `data/vision-probe-v2`) prompts (`probe_results.json`):
+Evaluated against the unmodified `BF16` `Qwen/Qwen-Image-2.1` pipeline (`probe_results.json`):
 
-| Metric | Value | Notes |
-| :--- | ---: | :--- |
-| **Teacher-Forced DiT Velocity Cosine** | **`0.998624`** (`99.86%`) | Mean step-by-step velocity prediction cosine similarity across early/mid/late FlowMatch steps |
-| **Teacher-Forced DiT Velocity SQNR** | **`26.61 dB`** | Relative RMSE = `0.04986` (`4.99%`) |
-| **`text_encoder` Prompt Embeds Cosine** | **`0.951179`** | Layer-35 unnormalized hidden states (`outputs.hidden_states[-1]`), SQNR = `13.52 dB` |
-| **End-to-End 16-Step Latent Cosine** | **`0.979887`** (`97.99%`) | Full 16-step FlowMatch trajectory with identical initial noise seed (`SQNR = 15.44 dB`) |
-| **End-to-End Decoded Image Mean PSNR** | **`23.09 dB`** | Decoded RGB pixel PSNR against BF16 teacher trajectory |
+| Metric | Held-Out Probe (`image-gen-probe-v1`, 64 rows) | Held-Out OOD Guard (`image-gen-guard-v1`, 24 rows) | Notes |
+| :--- | ---: | ---: | :--- |
+| **`transformer.txt_in` Conditioning Cosine** | **`0.999605`** (`31.95 dB` SQNR) | **`0.999426`** (`32.55 dB` SQNR) | T2I: `0.999834`, TI2I: `0.998918` (post-`QwenImage21ZeroCenterRMSNorm` DiT text conditioning) |
+| **`text_encoder` Prompt Embeds Cosine (T2I / All)** | **`0.992157`** / `0.957942` | **`0.991035`** / `0.939373` | Raw Layer-35 `outputs.hidden_states[-1]` (`18.20 dB` T2I SQNR) |
+| **Teacher-Forced DiT Velocity Cosine** | **`0.999050`** (`99.91%`) | **`0.998834`** (`99.88%`) | `48` probe / `18` guard states across early/mid/late FlowMatch steps & 5 aspect ratios |
+| **Teacher-Forced DiT Velocity SQNR** | **`28.85 dB`** (`Rel-RMSE 4.01%`) | **`27.62 dB`** (`Rel-RMSE 4.53%`) | T2I: `28.62 dB` (`0.99906`), TI2I: **`29.56 dB`** (`0.99901`); EN: `28.71 dB`, ZH: `29.04 dB` |
+| **End-to-End 16-Step Latent Cosine** | **`0.989304`** (`19.02 dB` SQNR) | **`0.981686`** (`17.81 dB` SQNR) | Full 16-step FlowMatch trajectory (`16` probe / `6` guard trajectories, T2I + TI2I) |
+| **End-to-End Decoded Image Mean PSNR** | **`26.97 dB`** | **`27.03 dB`** | T2I mean PSNR: `23.75 dB` (`22.94 dB` guard); TI2I mean PSNR: **`36.61 dB`** (`35.20 dB` guard) |
 
 ## Usage (`diffusers` + `warp-quant`)
 

@@ -7,29 +7,28 @@
   "dampening_frac": 0.01,
   "quantize_vision": true,
   "quantize_lm_head_w8": true,
+  "calibration_suite": {
+    "dir": "data/image-gen-calib-v1",
+    "suite": "image-gen-v1",
+    "rows": 96,
+    "rows_sha256": "fa083d1d687a953b859b83e13a558fb6ae488cdebecac5eae6b4856d9c4f1718"
+  },
   "text_encoder": {
-    "packed_matrices": 369,
-    "text_layers": 36,
-    "vision_matrices": 116,
-    "lm_head_w8": true,
-    "norm_qat": {
-      "enabled": true,
-      "steps": 120,
-      "val_rel_mse_before": 0.0171361668035388,
-      "val_rel_mse_after": 0.012911246158182621,
-      "accepted": true
-    }
+    "reused_from": "/root/out/Qwen-Image-2.1-Turbo-W4A16-HGPTQ/text_encoder"
   },
   "transformer": {
     "packed_matrices": 224,
+    "calib_states": 128,
     "dit_qat": {
       "enabled": true,
-      "steps": 120,
-      "val_rel_mse_before": 0.0013363969264901243,
-      "val_rel_mse_after": 0.0013190858298912644,
+      "steps": 160,
+      "val_states": 32,
+      "train_states": 96,
+      "val_rel_mse_before": 0.0015868580012465827,
+      "val_rel_mse_after": 0.0015820462231204147,
       "accepted": true
     }
   },
   "total_safetensors_bytes": 10541413216,
-  "quant_wall_s": 557.14
+  "quant_wall_s": 553.21
 }

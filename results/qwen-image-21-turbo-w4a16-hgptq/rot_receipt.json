@@ -7,29 +7,39 @@
   "dampening_frac": 0.01,
   "quantize_vision": true,
   "quantize_lm_head_w8": true,
+  "calibration_suite": {
+    "dir": "data/image-gen-calib-v1",
+    "suite": "image-gen-v1",
+    "rows": 96,
+    "rows_sha256": "fa083d1d687a953b859b83e13a558fb6ae488cdebecac5eae6b4856d9c4f1718"
+  },
   "text_encoder": {
     "packed_matrices": 369,
-    "text_layers": 36,
-    "vision_matrices": 116,
-    "lm_head_w8": true,
+    "calib_sequences": 256,
+    "calib_ti2i_sequences": 24,
     "norm_qat": {
       "enabled": true,
-      "steps": 120,
-      "val_rel_mse_before": 0.0171361668035388,
-      "val_rel_mse_after": 0.012911246158182621,
+      "steps": 160,
+      "val_sequences": 16,
+      "train_sequences": 48,
+      "val_rel_mse_before": 0.06457182293524966,
+      "val_rel_mse_after": 0.059997403383022174,
       "accepted": true
     }
   },
   "transformer": {
     "packed_matrices": 224,
+    "calib_states": 128,
     "dit_qat": {
       "enabled": true,
-      "steps": 120,
-      "val_rel_mse_before": 0.0009939775700331666,
-      "val_rel_mse_after": 0.0009719062436488457,
+      "steps": 160,
+      "val_states": 32,
+      "train_states": 96,
+      "val_rel_mse_before": 0.0015056615193316247,
+      "val_rel_mse_after": 0.0014716959976794897,
       "accepted": true
     }
   },
   "total_safetensors_bytes": 10541413216,
-  "quant_wall_s": 1084.86
+  "quant_wall_s": 1193.13
 }

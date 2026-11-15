@@ -16,6 +16,7 @@ uv run --no-sync pytest tests/test_hadamard_gptq.py -k test_target_regexes  # si
 mise run verify-data                                 # check data/SHA256SUMS
 mise run list-models                                 # print model keys, Hub pins, and recipes
 mise run build-vision-data                           # materialize data/vision-{calib,probe,guard}-v2
+mise run build-image-data                            # materialize data/image-gen-{calib,probe,guard}-v1
 mise run quantize -- --model 35b --output-dir ./out/Qwen3.6-35B-A3B-W4A16-HGPTQ
 mise run probe -- --model 35b --quant ./out/Qwen3.6-35B-A3B-W4A16-HGPTQ --eval-mtp \
   --eval-vision data/vision-probe-v2 --eval-vision-guard data/vision-guard-v2
@@ -35,4 +36,4 @@ uv run --no-sync warp-quant rco --model 9b --work-dir ./out/rco-9b-w2w4 --budget
 
 - **Completion gate**: `mise run check` and `mise run verify-data` must exit `0` before committing.
 - **Frozen datasets**: Never modify `data/*.jsonl` or `data/SHA256SUMS`, and never calibrate Vision on `vision-probe-v2` (`calibration=false`) or evaluate Vision on `vision-calib-v2` (`calibration=true`) — the pipeline enforces these manifest guards at runtime.
-- **Untracked outputs**: Never commit `.venv/`, `runs/`, `out/`, materialized image blobs (`data/vision-*-v2/`), or `.safetensors` weights.
+- **Untracked outputs**: Never commit `.venv/`, `runs/`, `out/`, materialized image blobs (`data/vision-*-v2/`, `data/image-gen-*-v1/`), or `.safetensors` weights.

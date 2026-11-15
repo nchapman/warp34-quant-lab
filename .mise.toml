@@ -61,6 +61,10 @@ run = "uv run --no-sync warp-quant list-models"
 description = "Materialize vision-calib-v2 (120 imgs), vision-probe-v2 (96 imgs), and vision-guard-v2 (48 imgs)"
 run = "uv run --no-sync warp-quant build-vision-data"
 
+[tasks."build-image-data"]
+description = "Materialize image-gen-calib-v1 (96 rows), image-gen-probe-v1 (64 rows), and image-gen-guard-v1 (24 rows)"
+run = "uv run --no-sync warp-quant build-image-data"
+
 [tasks.quantize]
 description = "Run W4A16-HGPTQ quantization (pass CLI args after `--`)"
 run = "uv run --no-sync warp-quant quantize"

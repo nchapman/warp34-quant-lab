@@ -35,6 +35,13 @@ from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 
 from warp_quant.cachepath import resolve_snapshot
+from warp_quant.data import (
+    _calculate_32_aligned_dimensions,
+    device_inputs,
+    encode_image_row,
+    prepare_image_gen_split,
+    sha256,
+)
 from warp_quant.hadamard_gptq import (
     LM_HEAD_TARGET_RE,
     TEXT_HAD_TARGET_RE,
@@ -42,8 +49,8 @@ from warp_quant.hadamard_gptq import (
     VISION_FC2_TARGET_RE,
     _assert_packed_alignment,
     _decompress_packed_2d,
-    _gptq_calibrate_vision,
     _gptq_pack_tensor,
+    _hadamard_rotate_last_dim,
     _hadamard_rotate_weight,
     log_event,
 )
@@ -71,46 +78,165 @@ DIT_IGNORE = [
     "norm_out.linear",
 ]
 
-# Disjoint calibration vs probe prompts for DiT trajectory collection
-CALIB_PROMPTS_T2I: tuple[str, ...] = (
-    'A neon shop sign that reads "QWEN IMAGE 2.1", rainy night, reflections on wet pavement, 35mm photo',
-    'A hand-lettered classroom chemistry poster titled "States of Matter" with clean diagrams and bullet notes',
-    "A studio portrait of an elderly clockmaker examining a brass tourbillon under warm tungsten light",
-    "An isometric cutaway architectural diagram of a subterranean hydroponic farm with labeled levels",
-    "A transparent RGBA sticker of a mechanical owl with copper wings and glowing amber eyes, isolated subject",
-    "A vintage railway travel poster for Kyoto in autumn, bold serif typography at top and bottom",
-    "A macro photograph of morning dew on a dragonfly wing, iridescent diffraction patterns, shallow depth of field",
-    'A chalkboard menu outside a Parisian bakery reading "Croissants Chauds & Cafe Crème - 4.50 EUR"',
-    "A watercolor botanical illustration of a pomegranate split open with Latin binomial calligraphy",
-    "A cyberpunk noodle stall at dusk with bilingual kanji and English holo-signs, volumetric steam",
-    "A flat-lay knolling photograph of vintage camera gear, brass lenses, film rolls, and handwritten notes",
-    'A retro 1970s science fiction book cover titled "ORBITAL DRIFT" in chrome geometric lettering',
-    "A high-contrast ink woodblock print of Mount Rainier above storm clouds in the style of Hokusai",
-    "A modern mobile banking UI dashboard screen showing expense charts, clean sans-serif typography",
-    "A transparent PNG sprite of a crystal potion bottle filled with swirling bioluminescent nebula liquid",
-    "An oil painting of a sunlit conservatory filled with monsteras, terracotta pots, and a sleeping tabby cat",
+SYS_PROMPT = "Comprehend and analyze the provided prompt."
+PROMPT_TEMPLATE_T2I = (
+    f"<|im_start|>system\n{SYS_PROMPT}<|im_end|>\n<|im_start|>user\n{{}}<|im_end|>\n<|im_start|>assistant\n"
+)
+PROMPT_TEMPLATE_TI2I = (
+    f"<|im_start|>system\n{SYS_PROMPT}<|im_end|>\n"
+    f"<|im_start|>user\n<image1><|vision_start|><|image_pad|><|vision_end|>{{}}<|im_end|>\n"
+    f"<|im_start|>assistant\n"
 )
 
-CALIB_PROMPTS_EDIT: tuple[str, ...] = (
-    'Add a small brass plaque at the bottom reading "ARCHIVE SPECIMEN NO. 14" while preserving the subject',
-    "Transform the lighting to golden hour sunset while keeping all text and structural layout intact",
-    "Convert the scene into a clean watercolor and ink architectural sketch while preserving proportions",
-    "Extract the main subject on a clean transparent background with crisp edges",
-)
 
-PROBE_PROMPTS_T2I: tuple[str, ...] = (
-    'A museum exhibition banner reading "SYMMETRY & LIGHT: 1925-2025" in crisp bauhaus typography, architectural hall',
-    "A close-up studio portrait of a violinist mid-performance, dramatic rim lighting, fine wood grain texture",
-    'An illustrated infographic poster titled "The Water Cycle" with arrows, clouds, mountains, and legible labels',
-    "A transparent RGBA cutout of an antique brass astrolabe with engraved celestial coordinates",
-    "A bustling night market in Taipei after rain, neon reflections on wet asphalt, cinematic wide shot",
-    'A minimalist coffee bag packaging design reading "SINGLE ORIGIN ETHIOPIA - YIRGACHEFFE" on matte kraft paper',
-)
+def load_image_gen_rows(
+    fixture_dir: str | Path,
+    *,
+    require_calibration: bool,
+    require_guard: bool | None = None,
+    auto_materialize: bool = True,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Load and validate an `image-gen-{calib,probe,guard}-v1` fixture directory."""
+    fdir = Path(fixture_dir)
+    if (not (fdir / "manifest.json").is_file() or not (fdir / "rows.jsonl").is_file()) and auto_materialize:
+        name = fdir.name
+        if name in ("image-gen-calib-v1", "image-gen-probe-v1", "image-gen-guard-v1"):
+            if fdir.exists():
+                shutil.rmtree(fdir)
+            split_map = {
+                "image-gen-calib-v1": "calibration",
+                "image-gen-probe-v1": "probe",
+                "image-gen-guard-v1": "guard",
+            }
+            prepare_image_gen_split(fdir, split=split_map[name])
 
-PROBE_PROMPTS_EDIT: tuple[str, ...] = (
-    'Relight the scene with cool moonlight and add a subtle caption "NIGHT STUDY" in the lower corner',
-    "Render the image in a crisp ligne-claire comic book style while preserving all text and geometry",
-)
+    manifest_path = fdir / "manifest.json"
+    rows_path = fdir / "rows.jsonl"
+    if not manifest_path.is_file() or not rows_path.is_file():
+        raise ValueError(
+            f"Image-gen fixture manifest/rows not found at {fdir} "
+            "(materialize with 'mise run build-image-data')"
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    is_cal = bool(manifest.get("calibration", False))
+    if is_cal != require_calibration:
+        role = "calibration" if require_calibration else "evaluation/probing"
+        raise ValueError(
+            f"Refusing to use fixture {fdir} (calibration={is_cal}) for {role} "
+            f"(expected calibration={require_calibration})"
+        )
+    if require_guard is not None and bool(manifest.get("guard", False)) != require_guard:
+        raise ValueError(
+            f"Fixture {fdir} guard={manifest.get('guard')} does not match expected guard={require_guard}"
+        )
+    if sha256(rows_path) != manifest.get("rows_sha256"):
+        raise ValueError(f"rows.jsonl checksum mismatch in {fdir}")
+
+    rows = [json.loads(line) for line in rows_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    for row in rows:
+        w = row.get("width")
+        h = row.get("height")
+        if not isinstance(w, int | float) or not isinstance(h, int | float) or w <= 0 or h <= 0:
+            raise ValueError(
+                f"Invalid width/height ({w!r}, {h!r}) in {fdir} row {row.get('domain')}:{row.get('source_row')}"
+            )
+        img_rel = row.get("image")
+        if img_rel is not None:
+            img_p = fdir / img_rel
+            if not img_p.is_file() or sha256(img_p) != row.get("image_sha256"):
+                raise ValueError(f"Image checksum mismatch for {img_p}")
+    return manifest, rows
+
+
+def select_stratified_image_gen_rows(
+    rows: list[dict[str, Any]],
+    per_domain: int,
+) -> list[dict[str, Any]]:
+    """Select the first `per_domain` rows from each domain in domain appearance order."""
+    by_dom: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        dom = row["domain"]
+        bucket = by_dom.setdefault(dom, [])
+        if len(bucket) < per_domain:
+            bucket.append(row)
+    selected: list[dict[str, Any]] = []
+    for k in range(per_domain):
+        for dom_rows in by_dom.values():
+            if k < len(dom_rows):
+                selected.append(dom_rows[k])
+    return selected
+
+
+def load_condition_pil_image(
+    fixture_dir: Path,
+    row: dict[str, Any],
+    *,
+    target_resolution: int | None = None,
+):
+    """Load a TI2I condition image as RGB (compositing RGBA over white as QwenImage21Pipeline does)."""
+    from PIL import Image
+
+    img_rel = row.get("image")
+    if img_rel is None:
+        return None
+    with Image.open(fixture_dir / img_rel) as raw_img:
+        if raw_img.mode == "RGBA":
+            white = Image.new("RGB", raw_img.size, (255, 255, 255))
+            white.paste(raw_img, mask=raw_img.getchannel("A"))
+            img = white
+        else:
+            img = raw_img.convert("RGB")
+    if target_resolution is not None:
+        w, h = _calculate_32_aligned_dimensions(
+            target_resolution * target_resolution, img.size[0] / img.size[1]
+        )
+        img = img.resize((w, h), Image.Resampling.BICUBIC)
+    return img
+
+
+def encode_qwen_image_row(
+    processor: Any,
+    fixture_dir: Path,
+    row: dict[str, Any],
+    *,
+    target_resolution: int = 512,
+    device: str | torch.device | None = None,
+) -> dict[str, torch.Tensor]:
+    """Format a T2I or TI2I row using `QwenImage21Pipeline`'s exact raw system+user template."""
+    prompt = row["prompt"] or " "
+    if row.get("mode") == "ti2i" and row.get("image") is not None:
+        cond_img = load_condition_pil_image(fixture_dir, row, target_resolution=target_resolution)
+        text = PROMPT_TEMPLATE_TI2I.format(prompt)
+        model_inputs = processor(
+            text=[text],
+            images=[cond_img],
+            padding=True,
+            padding_side="left",
+            return_tensors="pt",
+        )
+    else:
+        text = PROMPT_TEMPLATE_T2I.format(prompt)
+        model_inputs = processor(
+            text=[text],
+            padding=True,
+            padding_side="left",
+            return_tensors="pt",
+        )
+    forward_kwargs: dict[str, torch.Tensor] = {
+        "input_ids": model_inputs.input_ids,
+        "attention_mask": model_inputs.attention_mask,
+    }
+    if hasattr(model_inputs, "pixel_values") and model_inputs.pixel_values is not None:
+        forward_kwargs["pixel_values"] = model_inputs.pixel_values
+        forward_kwargs["image_grid_thw"] = model_inputs.image_grid_thw
+    if hasattr(model_inputs, "mm_token_type_ids") and model_inputs.mm_token_type_ids is not None:
+        forward_kwargs["mm_token_type_ids"] = model_inputs.mm_token_type_ids
+    if device is not None:
+        forward_kwargs = {
+            k: v.to(device=device, dtype=torch.bfloat16 if v.is_floating_point() else v.dtype)
+            for k, v in forward_kwargs.items()
+        }
+    return forward_kwargs
 
 
 def _online_hadamard_1d(x: torch.Tensor, block_size: int) -> torch.Tensor:
@@ -574,35 +700,198 @@ def load_qwen_image_pipeline(
 
 def _quantize_qwen_vl_vision_tower(
     text_encoder: nn.Module,
-    processor,
+    processor: Any,
     vision_calib_dir: Path,
+    image_gen_calib_dir: Path | None = None,
     *,
     group_size: int,
     hadamard_block_size: int,
     dampening_frac: float,
     device: torch.device,
-    max_samples: int = 48,
+    max_samples: int = 36,
+    max_pixels: int = 1024 * 1024,
 ) -> dict[str, dict[str, torch.Tensor]]:
     """Calibrate and GPTQ-quantize `text_encoder.model.visual` (`blocks.0..26`, `merger`,
-    and `deepstack_merger_list.0..2`) on `data/vision-calib-v2`."""
-    packed_out = _gptq_calibrate_vision(
-        text_encoder,
-        processor,
-        vision_calib_dir,
-        group_size=group_size,
-        hadamard_block_size=hadamard_block_size,
-        actorder="static",
-        dampening_frac=dampening_frac,
-        max_calib_samples=max_samples,
+    and `deepstack_merger_list.0..2`) on `data/image-gen-calib-v1` TI2I reference images
+    plus `data/vision-calib-v2` images, then install dequantized W4A16-HGPTQ weights and
+    online Hadamard input hooks onto `text_encoder.model.visual` in-place."""
+    from llmcompressor.modifiers.gptq.helpers import accumulate_hessian, make_empty_hessian
+
+    visual = text_encoder.model.visual
+    target_mods: dict[str, nn.Linear] = {}
+    had_blocks: dict[str, int] = {}
+    hessians: dict[str, torch.Tensor] = {}
+    num_samples: dict[str, torch.Tensor] = {}
+    hooks = []
+
+    for name, mod in visual.named_modules():
+        if not isinstance(mod, nn.Linear):
+            continue
+        target_mods[name] = mod
+        k_in = mod.weight.shape[1]
+        had_b = min(hadamard_block_size, k_in & -k_in) if hadamard_block_size > 0 else 0
+        had_blocks[name] = had_b
+        if had_b > 0:
+            mod.weight.data = _hadamard_rotate_weight(mod.weight.data, had_b)
+        hessians[name] = make_empty_hessian(mod, device)
+        num_samples[name] = torch.zeros(1, device=device, dtype=torch.int64)
+
+        def _make_hook(m_name: str, m_ref: nn.Linear, b_size: int):
+            def _pre_hook(_module, hook_args):
+                with torch.amp.autocast("cuda", enabled=False):
+                    x = hook_args[0]
+                    if b_size > 0:
+                        x = _hadamard_rotate_last_dim(x, b_size, compute_dtype=torch.float32)
+                    x_3d = x.unsqueeze(0) if x.dim() == 2 else x
+                    scale = (1024.0 / max(x_3d.shape[1], 1)) ** 0.25
+                    accumulate_hessian(x_3d * scale, m_ref, hessians[m_name], num_samples[m_name])
+                return (x, *hook_args[1:])
+
+            return _pre_hook
+
+        hooks.append(mod.register_forward_pre_hook(_make_hook(name, mod, had_b)))
+
+    n_ti2i = 0
+    n_v2 = 0
+    try:
+        with torch.no_grad():
+            if image_gen_calib_dir is not None and image_gen_calib_dir.exists():
+                _, ig_rows = load_image_gen_rows(image_gen_calib_dir, require_calibration=True)
+                for row in ig_rows:
+                    if row.get("mode") != "ti2i" or row.get("image") is None:
+                        continue
+                    fw_kw = encode_qwen_image_row(
+                        processor, image_gen_calib_dir, row, target_resolution=512, device=device
+                    )
+                    if "pixel_values" in fw_kw and "image_grid_thw" in fw_kw:
+                        _ = visual(fw_kw["pixel_values"], grid_thw=fw_kw["image_grid_thw"])
+                        n_ti2i += 1
+
+            manifest_p = vision_calib_dir / "manifest.json"
+            if manifest_p.is_file():
+                manifest = json.loads(manifest_p.read_text(encoding="utf-8"))
+                if not manifest.get("calibration", False):
+                    raise ValueError(
+                        f"Refusing to calibrate Vision on non-calibration fixture: {vision_calib_dir}"
+                    )
+                rows_p = vision_calib_dir / "rows.jsonl"
+                v_rows = [
+                    json.loads(line)
+                    for line in rows_p.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+                for row in v_rows[:max_samples]:
+                    encoded, _, _ = encode_image_row(processor, vision_calib_dir, row, max_pixels)
+                    inputs = device_inputs(encoded, device)
+                    _ = visual(inputs["pixel_values"], grid_thw=inputs["image_grid_thw"])
+                    n_v2 += 1
+            elif n_ti2i == 0:
+                raise ValueError(
+                    f"No vision calibration images found in {image_gen_calib_dir} or {vision_calib_dir}"
+                )
+    finally:
+        for h in hooks:
+            h.remove()
+
+    packed_by_prefix: dict[str, dict[str, torch.Tensor]] = {}
+    for name, mod in target_mods.items():
+        k_in = mod.weight.shape[1]
+        strat = "group" if k_in % group_size == 0 else "channel"
+        g_size = group_size if strat == "group" else None
+        packed = _gptq_pack_tensor(
+            mod.weight.data,
+            hessians.pop(name),
+            num_samples.pop(name),
+            strategy=strat,
+            group_size=g_size,
+            actorder="static" if strat == "group" else None,
+            dampening_frac=dampening_frac,
+        )
+        packed_by_prefix[f"model.visual.{name}"] = packed
+        deq = _decompress_packed_2d(
+            packed["weight_packed"], packed["weight_scale"], packed["weight_shape"]
+        ).to(device=device, dtype=mod.weight.dtype)
+        mod.weight.data.copy_(deq)
+        hb = had_blocks[name]
+        if hb > 0:
+
+            def _vis_rot_hook(_m: nn.Module, args: tuple[Any, ...], _hb: int = hb):
+                return (_online_hadamard_1d(args[0], _hb).to(dtype=_m.weight.dtype), *args[1:])
+
+            mod.register_forward_pre_hook(_vis_rot_hook)
+
+    torch.cuda.empty_cache()
+    log_event(
+        "QWEN_IMAGE_VISION_CALIB_DONE",
+        matrices=len(packed_by_prefix),
+        ti2i_images=n_ti2i,
+        v2_images=n_v2,
     )
-    log_event("QWEN_IMAGE_VISION_CALIB_DONE", matrices=len(packed_out), dir=str(vision_calib_dir))
-    return packed_out
+    return packed_by_prefix
+
+
+class _StopDecoderEntry(Exception):
+    """Internal control-flow signal used to capture exact inputs entering `Qwen3VLTextModel`."""
+
+
+def _capture_lang_model_entry(
+    model: nn.Module,
+    forward_kwargs: dict[str, torch.Tensor],
+) -> dict[str, Any]:
+    """Run `model` up to the entry of `model.model.language_model` (including Vision + DeepStack
+    feature extraction and 3D M-RoPE position calculation) and return the exact decoder inputs."""
+    lang_model = model.model.language_model
+    captured: dict[str, Any] = {}
+
+    def _lang_pre_hook(_m: nn.Module, _args: tuple[Any, ...], kwargs: dict[str, Any]):
+        inputs_embeds = kwargs.get("inputs_embeds")
+        input_ids = kwargs.get("input_ids")
+        if inputs_embeds is None:
+            inputs_embeds = lang_model.embed_tokens(input_ids)
+        pos_ids = kwargs.get("position_ids")
+        if pos_ids is None:
+            seq_l = inputs_embeds.shape[1]
+            pos_ids = (
+                torch.arange(seq_l, device=inputs_embeds.device)
+                .view(1, 1, -1)
+                .expand(4, inputs_embeds.shape[0], -1)
+            )
+        elif pos_ids.ndim == 2:
+            pos_ids = pos_ids[None, ...].expand(4, pos_ids.shape[0], -1)
+        if pos_ids.ndim == 3 and pos_ids.shape[0] == 4:
+            text_pos = pos_ids[0]
+            rope_pos = pos_ids[1:]
+        else:
+            text_pos = pos_ids[0]
+            rope_pos = pos_ids
+        pe = lang_model.rotary_emb(inputs_embeds, rope_pos)
+        vis_mask = kwargs.get("visual_pos_masks")
+        ds_embeds = kwargs.get("deepstack_visual_embeds")
+        captured["hidden_states"] = inputs_embeds.detach().cpu()
+        captured["pos_emb"] = (pe[0].detach().cpu(), pe[1].detach().cpu())
+        captured["text_pos"] = text_pos.detach().cpu()
+        captured["visual_pos_masks"] = vis_mask.detach().cpu() if vis_mask is not None else None
+        captured["deepstack_embeds"] = (
+            [d.detach().cpu() for d in ds_embeds] if ds_embeds is not None else None
+        )
+        raise _StopDecoderEntry()
+
+    hk = lang_model.register_forward_pre_hook(_lang_pre_hook, with_kwargs=True)
+    try:
+        try:
+            model(**forward_kwargs, use_cache=False)
+        except _StopDecoderEntry:
+            pass
+    finally:
+        hk.remove()
+    return captured
 
 
 def _quantize_qwen_vl_text_encoder(
     base_dir: Path,
     output_te_dir: Path,
     *,
+    image_calib_dir: Path,
     calib_path: Path,
     vision_calib_dir: Path,
     calib_samples: int = 256,
@@ -612,11 +901,13 @@ def _quantize_qwen_vl_text_encoder(
     dampening_frac: float = 0.01,
     quantize_vision: bool = True,
     quantize_lm_head_w8: bool = True,
-    norm_qat_steps: int = 120,
+    norm_qat_steps: int = 160,
     device: torch.device | None = None,
 ) -> dict[str, Any]:
     """Calibrate and quantize `text_encoder/` (`Qwen3VLForConditionalGeneration`) to W4A16-HGPTQ
-    with sequential layer-by-layer Hessian propagation and Layer-35 unnormalized hidden-state Norm QAT."""
+    using `data/image-gen-calib-v1` (96 stratified T2I + multimodal DeepStack TI2I rows across
+    16 EN+ZH domains) plus `data/calib-cascade-v1.jsonl`, with sequential layer-by-layer Hessian
+    propagation and End-to-End Layer-35 unnormalized hidden-state Norm QAT."""
     from transformers import Qwen3VLForConditionalGeneration, Qwen3VLProcessor
 
     device = device or torch.device("cuda:0")
@@ -627,18 +918,48 @@ def _quantize_qwen_vl_text_encoder(
     processor = Qwen3VLProcessor.from_pretrained(str(proc_dir))
     tokenizer = processor.tokenizer
 
-    log_event("QWEN_IMAGE_TE_LOAD", path=str(te_src_dir))
+    _, ig_rows = load_image_gen_rows(image_calib_dir, require_calibration=True)
+    # Order ig_rows as 6 stratified passes over the 16 domains so any prefix is domain-balanced:
+    # - indices 0..15 (1 per domain: 12 T2I + 4 TI2I, EN+ZH) -> Norm QAT validation split
+    # - indices 16..63 (3 per domain: 36 T2I + 12 TI2I, EN+ZH) -> Norm QAT training split
+    # - indices 0..95 (all 96 rows: 72 T2I + 24 TI2I, EN+ZH) -> sequential GPTQ calibration
+    strat_ig_rows = select_stratified_image_gen_rows(ig_rows, per_domain=6)
+    qat_ig_rows = strat_ig_rows[: min(64, len(strat_ig_rows))]
+
+    log_event("QWEN_IMAGE_TE_LOAD", path=str(te_src_dir), ig_calib_rows=len(strat_ig_rows))
     model = Qwen3VLForConditionalGeneration.from_pretrained(
         str(te_src_dir), torch_dtype=torch.bfloat16, device_map={"": device}
     )
     model.eval()
+    lang_model = model.model.language_model
+    layers = lang_model.layers
+    num_layers = len(layers)
 
+    # 1. Capture full BF16 teacher unnormalized Layer-35 output (`hidden_states[-1]`) BEFORE quantizing Vision
+    teacher_pre_norm: list[torch.Tensor] = []
+    with torch.no_grad():
+        for row in qat_ig_rows:
+            fw_kw = encode_qwen_image_row(
+                processor, image_calib_dir, row, target_resolution=512, device=device
+            )
+            captured: list[torch.Tensor] = []
+            h = lang_model.norm.register_forward_hook(
+                lambda _m, a, _o, _cap=captured: _cap.append(a[0].detach().cpu()) or a[0]
+            )
+            try:
+                model(**fw_kw, use_cache=False)
+            finally:
+                h.remove()
+            teacher_pre_norm.append(captured[0])
+
+    # 2. Quantize Vision tower (`blocks.0..26`, `merger`, `deepstack_merger_list.0..2`) and update live weights
     packed_tensors: dict[str, dict[str, torch.Tensor]] = {}
     if quantize_vision:
         vis_packed = _quantize_qwen_vl_vision_tower(
             model,
             processor,
             vision_calib_dir,
+            image_calib_dir,
             group_size=group_size,
             hadamard_block_size=hadamard_block_size,
             dampening_frac=dampening_frac,
@@ -646,71 +967,56 @@ def _quantize_qwen_vl_text_encoder(
         )
         packed_tensors.update(vis_packed)
 
-    # Build calibration token sequences combining calib-cascade-v1.jsonl and QwenImage21 T2I prompt templates
-    seqs: list[torch.Tensor] = []
-    sys_tpl = (
-        "<|im_start|>system\nComprehend and analyze the provided prompt.<|im_end|>\n"
-        "<|im_start|>user\n{}<|im_end|>\n"
-        "<|im_start|>assistant\n"
-    )
-    for p in CALIB_PROMPTS_T2I + CALIB_PROMPTS_EDIT:
-        ids = tokenizer(
-            sys_tpl.format(p), return_tensors="pt", truncation=True, max_length=calib_seq_len
-        ).input_ids
-        if ids.shape[1] >= 16:
-            seqs.append(ids)
-
-    with calib_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            if len(seqs) >= calib_samples:
+    # 3. Capture post-quantized-Vision entry states to `lang_model.layers[0]` across all 96 T2I/TI2I rows
+    #    plus general text rows from `calib_path` up to `calib_samples`.
+    entry_states: list[dict[str, Any]] = []
+    with torch.no_grad():
+        for row in strat_ig_rows:
+            if len(entry_states) >= calib_samples:
                 break
-            row = json.loads(line)
-            text = row.get("text") or ""
-            conv = row.get("conversations") or row.get("messages")
-            if not text and conv:
-                text = "\n".join(m.get("content", "") for m in conv if isinstance(m.get("content"), str))
-            if not text:
-                continue
-            ids = tokenizer(text, return_tensors="pt", truncation=True, max_length=calib_seq_len).input_ids
-            if ids.shape[1] >= 32:
-                seqs.append(ids)
-
-    log_event("QWEN_IMAGE_TE_CALIB_SEQS", count=len(seqs))
-    lang_model = model.model.language_model
-    layers = lang_model.layers
-    num_layers = len(layers)
-
-    # Capture teacher unnormalized Layer-(num_layers-1) output on the first 64 sequences for Norm QAT & W8 lm_head
-    qat_seqs = seqs[: min(64, len(seqs))]
-    teacher_pre_norm: list[torch.Tensor] = []
-    with torch.no_grad():
-        for ids in qat_seqs:
-            captured: list[torch.Tensor] = []
-            h = lang_model.norm.register_forward_hook(
-                lambda _m, a, _o, _cap=captured: _cap.append(a[0].detach().cpu()) or a[0]
+            fw_kw = encode_qwen_image_row(
+                processor, image_calib_dir, row, target_resolution=512, device=device
             )
-            try:
-                model(input_ids=ids.to(device), use_cache=False)
-            finally:
-                h.remove()
-            teacher_pre_norm.append(captured[0])
+            entry_states.append(_capture_lang_model_entry(model, fw_kw))
 
-    # Sequential layer-by-layer Hessian GPTQ across all 36 decoder layers (streaming hidden states)
-    cur_h: list[torch.Tensor] = []
-    pos_embs: list[tuple[torch.Tensor, torch.Tensor]] = []
-    text_pos_list: list[torch.Tensor] = []
-    with torch.no_grad():
-        for ids in seqs:
-            ids_d = ids.to(device)
-            emb = lang_model.embed_tokens(ids_d)
-            seq_l = emb.shape[1]
-            p3d = torch.arange(seq_l, device=device).view(1, 1, -1).expand(3, emb.shape[0], -1)
-            tpos = torch.arange(seq_l, device=device).view(1, -1).expand(emb.shape[0], -1)
-            pe = lang_model.rotary_emb(emb, p3d)
-            cur_h.append(emb.detach().cpu())
-            pos_embs.append((pe[0].detach().cpu(), pe[1].detach().cpu()))
-            text_pos_list.append(tpos.detach().cpu())
+        if calib_path.is_file() and len(entry_states) < calib_samples:
+            with calib_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    if len(entry_states) >= calib_samples:
+                        break
+                    row = json.loads(line)
+                    text = row.get("text") or ""
+                    conv = row.get("conversations") or row.get("messages")
+                    if not text and conv:
+                        text = "\n".join(
+                            m.get("content", "") for m in conv if isinstance(m.get("content"), str)
+                        )
+                    if not text:
+                        continue
+                    ids = tokenizer(
+                        text, return_tensors="pt", truncation=True, max_length=calib_seq_len
+                    ).input_ids
+                    if ids.shape[1] >= 32:
+                        entry_states.append(_capture_lang_model_entry(model, {"input_ids": ids.to(device)}))
 
+    n_seqs = len(entry_states)
+    n_ti2i_seqs = sum(1 for e in entry_states if e["deepstack_embeds"] is not None)
+    log_event("QWEN_IMAGE_TE_CALIB_SEQS", count=n_seqs, ti2i_multimodal=n_ti2i_seqs)
+
+    # Save initial layer-0 inputs for the 64 QAT sequences before `cur_h` is mutated across layers
+    qat_init_entries = [
+        {
+            "hidden_states": e["hidden_states"].clone(),
+            "pos_emb": e["pos_emb"],
+            "text_pos": e["text_pos"],
+            "visual_pos_masks": e["visual_pos_masks"],
+            "deepstack_embeds": e["deepstack_embeds"],
+        }
+        for e in entry_states[: len(teacher_pre_norm)]
+    ]
+    cur_h: list[torch.Tensor] = [e["hidden_states"] for e in entry_states]
+
+    # 4. Sequential layer-by-layer Hessian GPTQ across all 36 decoder layers (with DeepStack injection)
     for l_idx in range(num_layers):
         t0 = time.perf_counter()
         layer = layers[l_idx]
@@ -741,15 +1047,16 @@ def _quantize_qwen_vl_text_encoder(
             hk = first_mod.register_forward_pre_hook(_acc_hook)
             try:
                 with torch.no_grad():
-                    for s_idx in range(len(seqs)):
+                    for s_idx in range(n_seqs):
+                        pe = entry_states[s_idx]["pos_emb"]
                         pe_d = (
-                            pos_embs[s_idx][0].to(device=device, dtype=torch.bfloat16),
-                            pos_embs[s_idx][1].to(device=device, dtype=torch.bfloat16),
+                            pe[0].to(device=device, dtype=torch.bfloat16),
+                            pe[1].to(device=device, dtype=torch.bfloat16),
                         )
                         layer(
                             cur_h[s_idx].to(device=device, dtype=torch.bfloat16),
                             attention_mask=None,
-                            position_ids=text_pos_list[s_idx].to(device),
+                            position_ids=entry_states[s_idx]["text_pos"].to(device),
                             past_key_values=None,
                             position_embeddings=pe_d,
                         )
@@ -783,18 +1090,27 @@ def _quantize_qwen_vl_text_encoder(
                 mod.register_forward_pre_hook(_rot_pre_hook)
 
         with torch.no_grad():
-            for s_idx in range(len(seqs)):
+            for s_idx in range(n_seqs):
+                pe = entry_states[s_idx]["pos_emb"]
                 pe_d = (
-                    pos_embs[s_idx][0].to(device=device, dtype=torch.bfloat16),
-                    pos_embs[s_idx][1].to(device=device, dtype=torch.bfloat16),
+                    pe[0].to(device=device, dtype=torch.bfloat16),
+                    pe[1].to(device=device, dtype=torch.bfloat16),
                 )
                 out_h = layer(
                     cur_h[s_idx].to(device=device, dtype=torch.bfloat16),
                     attention_mask=None,
-                    position_ids=text_pos_list[s_idx].to(device),
+                    position_ids=entry_states[s_idx]["text_pos"].to(device),
                     past_key_values=None,
                     position_embeddings=pe_d,
                 )
+                ds_list = entry_states[s_idx]["deepstack_embeds"]
+                v_mask = entry_states[s_idx]["visual_pos_masks"]
+                if ds_list is not None and v_mask is not None and l_idx < len(ds_list):
+                    out_h = lang_model._deepstack_process(
+                        out_h,
+                        v_mask.to(device=device),
+                        ds_list[l_idx].to(device=device, dtype=out_h.dtype),
+                    )
                 cur_h[s_idx] = out_h.detach().cpu()
 
         log_event(
@@ -804,7 +1120,7 @@ def _quantize_qwen_vl_text_encoder(
             elapsed_s=round(time.perf_counter() - t0, 2),
         )
 
-    # Quantize untied lm_head to unrotated W8_g64 GPTQ+MSE
+    # 5. Quantize untied lm_head to unrotated W8_g64 GPTQ+MSE
     if quantize_lm_head_w8 and hasattr(model, "lm_head") and isinstance(model.lm_head, nn.Linear):
         k_lm = model.lm_head.in_features
         h_lm = torch.zeros((k_lm, k_lm), dtype=torch.float32, device=device)
@@ -829,13 +1145,14 @@ def _quantize_qwen_vl_text_encoder(
         )
         del h_lm
 
-    # End-to-End FP32-master RMSNorm QAT targeting unnormalized Layer-35 output (`hidden_states[-1]`)
+    # 6. End-to-End FP32-master RMSNorm QAT targeting unnormalized Layer-35 output (`hidden_states[-1]`)
+    #    across stratified T2I + multimodal DeepStack TI2I sequences.
     qat_summary: dict[str, Any] = {"enabled": norm_qat_steps > 0}
-    if norm_qat_steps > 0 and len(qat_seqs) >= 8:
-        val_seqs = qat_seqs[:8]
-        val_targets = teacher_pre_norm[:8]
-        tr_seqs = qat_seqs[8:]
-        tr_targets = teacher_pre_norm[8:]
+    if norm_qat_steps > 0 and len(qat_init_entries) >= 16:
+        val_entries = qat_init_entries[:16]
+        val_targets = teacher_pre_norm[:16]
+        tr_entries = qat_init_entries[16:]
+        tr_targets = teacher_pre_norm[16:]
 
         for p in model.parameters():
             p.requires_grad_(False)
@@ -859,19 +1176,38 @@ def _quantize_qwen_vl_text_encoder(
                     )
                 )
 
+        def _forward_lang_entry(entry: dict[str, Any]) -> torch.Tensor:
+            h = entry["hidden_states"].to(device=device, dtype=torch.bfloat16)
+            pe = entry["pos_emb"]
+            pe_d = (
+                pe[0].to(device=device, dtype=torch.bfloat16),
+                pe[1].to(device=device, dtype=torch.bfloat16),
+            )
+            tpos = entry["text_pos"].to(device)
+            ds_list = entry["deepstack_embeds"]
+            v_mask = entry["visual_pos_masks"]
+            v_mask_d = v_mask.to(device=device) if v_mask is not None else None
+            for l_i, lyr in enumerate(layers):
+                h = lyr(
+                    h,
+                    attention_mask=None,
+                    position_ids=tpos,
+                    past_key_values=None,
+                    position_embeddings=pe_d,
+                )
+                if ds_list is not None and v_mask_d is not None and l_i < len(ds_list):
+                    h = lang_model._deepstack_process(
+                        h,
+                        v_mask_d,
+                        ds_list[l_i].to(device=device, dtype=h.dtype),
+                    )
+            return h
+
         def _eval_pre_norm_mse() -> float:
             errs = []
             with torch.no_grad():
-                for ids, tgt in zip(val_seqs, val_targets, strict=True):
-                    cap: list[torch.Tensor] = []
-                    hk = lang_model.norm.register_forward_hook(
-                        lambda _m, a, _o, _c=cap: _c.append(a[0]) or a[0]
-                    )
-                    try:
-                        model(input_ids=ids.to(device), use_cache=False)
-                    finally:
-                        hk.remove()
-                    pred = cap[0].float()
+                for ent, tgt in zip(val_entries, val_targets, strict=True):
+                    pred = _forward_lang_entry(ent).float()
                     ref = tgt.to(device=device, dtype=torch.float32)
                     errs.append(float(((pred - ref).pow(2).sum() / ref.pow(2).sum().clamp_min(1e-12)).item()))
             return sum(errs) / max(len(errs), 1)
@@ -880,17 +1216,11 @@ def _quantize_qwen_vl_text_encoder(
         opt = torch.optim.Adam(norm_params, lr=1e-4)
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=norm_qat_steps, eta_min=1e-5)
         for step in range(norm_qat_steps):
-            idx = step % len(tr_seqs)
-            ids = tr_seqs[idx].to(device)
+            idx = step % len(tr_entries)
+            ent = tr_entries[idx]
             tgt = tr_targets[idx].to(device=device, dtype=torch.float32)
             opt.zero_grad(set_to_none=True)
-            cap_step: list[torch.Tensor] = []
-            hk = lang_model.norm.register_forward_hook(lambda _m, a, _o, _c=cap_step: _c.append(a[0]) or a[0])
-            try:
-                model(input_ids=ids, use_cache=False)
-            finally:
-                hk.remove()
-            pred = cap_step[0].float()
+            pred = _forward_lang_entry(ent).float()
             loss = (pred - tgt).pow(2).mean() / tgt.pow(2).mean().clamp_min(1e-6)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(norm_params, 1.0)
@@ -907,6 +1237,8 @@ def _quantize_qwen_vl_text_encoder(
         qat_summary = {
             "enabled": True,
             "steps": norm_qat_steps,
+            "val_sequences": len(val_entries),
+            "train_sequences": len(tr_entries),
             "val_rel_mse_before": val_before,
             "val_rel_mse_after": val_after,
             "accepted": accepted,
@@ -940,24 +1272,28 @@ def _quantize_qwen_vl_text_encoder(
     torch.cuda.empty_cache()
     return {
         "packed_matrices": len(packed_tensors),
+        "calib_sequences": n_seqs,
+        "calib_ti2i_sequences": n_ti2i_seqs,
         "norm_qat": qat_summary,
     }
 
 
 def _collect_dit_calib_states(
     base_dir: Path,
-    vision_calib_dir: Path,
+    image_calib_dir: Path,
     *,
-    num_prompts: int = 16,
+    prompts_per_domain: int = 2,
     steps_per_prompt: int = 4,
     calib_resolution: int = 512,
     device: torch.device | None = None,
 ) -> list[dict[str, Any]]:
     """Collect real FlowMatch denoising trajectory inputs at the entry to `transformer_blocks[0]`
-    plus teacher block-31 output states across T2I and TI2I (reference-image editing) prompts."""
-    from PIL import Image
-
+    plus teacher block-31 output states across stratified T2I (multi-aspect-ratio, EN+ZH) and
+    TI2I (real reference-image editing, EN+ZH) rows from `data/image-gen-calib-v1`."""
     device = device or torch.device("cuda:0")
+
+    _, all_rows = load_image_gen_rows(image_calib_dir, require_calibration=True)
+    selected_rows = select_stratified_image_gen_rows(all_rows, per_domain=prompts_per_domain)
 
     pipe = load_qwen_image_pipeline(
         base_dir,
@@ -968,25 +1304,13 @@ def _collect_dit_calib_states(
     )
     tr = pipe.transformer
 
-    # Load a few calibration images from data/vision-calib-v2 (enforcing calibration=true)
-    manifest_p = vision_calib_dir / "manifest.json"
-    if manifest_p.is_file():
-        m = json.loads(manifest_p.read_text())
-        if not m.get("calibration", False):
-            raise ValueError(f"Refusing to calibrate DiT on non-calibration fixture {vision_calib_dir}")
-    calib_imgs: list[Image.Image] = []
-    img_dir = vision_calib_dir / "images"
-    if img_dir.is_dir():
-        for p in sorted(img_dir.glob("*.image"))[:4]:
-            calib_imgs.append(Image.open(p).convert("RGB"))
-
     records: list[dict[str, Any]] = []
-    prompts = list(CALIB_PROMPTS_T2I[: max(num_prompts - len(CALIB_PROMPTS_EDIT), 4)])
-
-    # Hook transformer_blocks[0] input and transformer_blocks[-1] output on selected steps
-    for p_idx, prompt in enumerate(prompts + list(CALIB_PROMPTS_EDIT)):
-        is_edit = p_idx >= len(prompts) and len(calib_imgs) > 0
-        cond_img = [calib_imgs[p_idx % len(calib_imgs)]] if is_edit else None
+    for p_idx, row in enumerate(selected_rows):
+        cond_pil = load_condition_pil_image(image_calib_dir, row, target_resolution=calib_resolution)
+        cond_img = [cond_pil] if cond_pil is not None else None
+        w_cal, h_cal = _calculate_32_aligned_dimensions(
+            calib_resolution * calib_resolution, float(row["width"]) / float(row["height"])
+        )
         total_steps = 8 if pipe.config.sample_sigmas is not None else 12
         capture_indices = set(
             int(round(i * (total_steps - 1) / max(steps_per_prompt - 1, 1))) for i in range(steps_per_prompt)
@@ -1001,8 +1325,12 @@ def _collect_dit_calib_states(
             _sc: list[int] = step_counter,
             _ci: set[int] = capture_indices,
             _ce: dict[str, Any] = cur_entry,
+            _row: dict[str, Any] = row,
         ):
             if _sc[0] in _ci:
+                _ce["domain"] = _row["domain"]
+                _ce["mode"] = _row["mode"]
+                _ce["lang"] = _row["lang"]
                 _ce["hidden_states"] = kwargs["hidden_states"].detach().cpu()
                 _ce["modulation"] = kwargs["modulation"].detach().cpu()
                 _ce["rotary_emb"] = kwargs["rotary_emb"].detach().cpu()
@@ -1035,9 +1363,9 @@ def _collect_dit_calib_states(
         try:
             gen = torch.Generator(device=device).manual_seed(1000 + p_idx)
             call_kwargs: dict[str, Any] = {
-                "prompt": prompt,
-                "height": calib_resolution,
-                "width": calib_resolution,
+                "prompt": row["prompt"],
+                "height": h_cal,
+                "width": w_cal,
                 "output_resolution": calib_resolution,
                 "generator": gen,
                 "use_kv_cache": False,
@@ -1052,7 +1380,13 @@ def _collect_dit_calib_states(
             h0.remove()
             h1.remove()
 
-    log_event("QWEN_IMAGE_DIT_CALIB_STATES", samples=len(records))
+    log_event(
+        "QWEN_IMAGE_DIT_CALIB_STATES",
+        trajectories=len(selected_rows),
+        samples=len(records),
+        t2i_samples=sum(1 for r in records if r.get("mode") == "t2i"),
+        ti2i_samples=sum(1 for r in records if r.get("mode") == "ti2i"),
+    )
     del pipe, tr
     gc.collect()
     torch.cuda.empty_cache()
@@ -1067,7 +1401,7 @@ def _quantize_qwen_image_dit(
     group_size: int = 64,
     hadamard_block_size: int = 64,
     dampening_frac: float = 0.01,
-    dit_qat_steps: int = 120,
+    dit_qat_steps: int = 160,
     device: torch.device | None = None,
 ) -> dict[str, Any]:
     """Sequential block-by-block HGPTQ + End-to-End Velocity QAT on `QwenImage21Transformer2DModel`."""
@@ -1198,9 +1532,10 @@ def _quantize_qwen_image_dit(
 
     # End-to-End QK-Norm QAT on transformer_blocks.*.attn.{norm_q,norm_k} against teacher block-31 output
     qat_summary: dict[str, Any] = {"enabled": dit_qat_steps > 0}
-    if dit_qat_steps > 0 and len(calib_records) >= 8:
-        val_recs = calib_records[:8]
-        tr_recs = calib_records[8:]
+    if dit_qat_steps > 0 and len(calib_records) >= 16:
+        n_val = min(max(len(calib_records) // 4, 8), 32)
+        val_recs = calib_records[:n_val]
+        tr_recs = calib_records[n_val:]
         for p in model.parameters():
             p.requires_grad_(False)
         qk_params: list[nn.Parameter] = []
@@ -1284,6 +1619,8 @@ def _quantize_qwen_image_dit(
         qat_summary = {
             "enabled": True,
             "steps": dit_qat_steps,
+            "val_states": len(val_recs),
+            "train_states": len(tr_recs),
             "val_rel_mse_before": val_before,
             "val_rel_mse_after": val_after,
             "accepted": accepted,
@@ -1313,6 +1650,7 @@ def _quantize_qwen_image_dit(
     torch.cuda.empty_cache()
     return {
         "packed_matrices": len(packed_tensors),
+        "calib_states": len(calib_records),
         "dit_qat": qat_summary,
     }
 
@@ -1349,9 +1687,19 @@ def run_quantize_qwen_image(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    calib_path = Path(args.calib or "data/calib-cascade-v1.jsonl")
+    raw_calib = Path(args.calib) if getattr(args, "calib", None) else Path("data/image-gen-calib-v1")
+    if raw_calib.is_dir() or raw_calib.name.startswith("image-gen-"):
+        image_calib_dir = raw_calib
+        calib_path = Path("data/calib-cascade-v1.jsonl")
+    else:
+        image_calib_dir = Path("data/image-gen-calib-v1")
+        calib_path = raw_calib
+
     vision_calib_dir = Path(args.vision_calib_dir or "data/vision-calib-v2")
     dev = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    # Ensure `image-gen-calib-v1` is materialized and passes manifest/checksum verification
+    ig_manifest, _ = load_image_gen_rows(image_calib_dir, require_calibration=True)
 
     # 1. Quantize or reuse text_encoder/
     reuse_te = getattr(args, "reuse_ple_vision_from", None)
@@ -1371,6 +1719,7 @@ def run_quantize_qwen_image(args: argparse.Namespace) -> None:
         te_summary = _quantize_qwen_vl_text_encoder(
             base_dir,
             te_out_dir,
+            image_calib_dir=image_calib_dir,
             calib_path=calib_path,
             vision_calib_dir=vision_calib_dir,
             calib_samples=args.num_samples or 256,
@@ -1383,11 +1732,11 @@ def run_quantize_qwen_image(args: argparse.Namespace) -> None:
             device=dev,
         )
 
-    # 2. Collect DiT trajectory calibration states and quantize transformer/
+    # 2. Collect DiT trajectory calibration states across all 16 domains (2 per domain = 32 trajectories, 128 states)
     calib_records = _collect_dit_calib_states(
         base_dir,
-        vision_calib_dir,
-        num_prompts=16,
+        image_calib_dir,
+        prompts_per_domain=2,
         steps_per_prompt=4,
         calib_resolution=512,
         device=dev,
@@ -1413,6 +1762,12 @@ def run_quantize_qwen_image(args: argparse.Namespace) -> None:
         "dampening_frac": args.dampening_frac,
         "quantize_vision": args.quantize_vision,
         "quantize_lm_head_w8": args.quantize_lm_head_w8,
+        "calibration_suite": {
+            "dir": str(image_calib_dir),
+            "suite": ig_manifest.get("suite"),
+            "rows": ig_manifest.get("rows"),
+            "rows_sha256": ig_manifest.get("rows_sha256"),
+        },
         "text_encoder": te_summary,
         "transformer": dit_summary,
         "total_safetensors_bytes": total_bytes,
@@ -1449,13 +1804,277 @@ def _compute_image_psnr(img_pred, img_ref) -> float:
     return 10.0 * math.log10(1.0 / mse)
 
 
-def run_probe_qwen_image(args: argparse.Namespace) -> None:
-    """Evaluate a quantized Qwen-Image-2.1 / Qwen-Image-2.1-Turbo checkpoint against its BF16 teacher:
-    1. Held-out `text_encoder` prompt_embeds fidelity (T2I + TI2I with `data/vision-probe-v2`),
-    2. Single-step teacher-forced DiT velocity prediction fidelity across denoising timesteps,
-    3. Full deterministic trajectory latent & decoded RGB image PSNR / cosine / SQNR."""
-    from PIL import Image
+def _summarize_metric_list(items: list[dict[str, Any]]) -> dict[str, Any]:
+    if not items:
+        return {"count": 0, "mean_cosine": 0.0, "mean_rel_rmse": 0.0, "mean_sqnr_db": 0.0}
+    n = len(items)
+    out: dict[str, Any] = {
+        "count": n,
+        "mean_cosine": sum(d["cosine"] for d in items) / n,
+        "mean_rel_rmse": sum(d["rel_rmse"] for d in items) / n,
+        "mean_sqnr_db": sum(d["sqnr_db"] for d in items) / n,
+    }
+    if "image_psnr_db" in items[0]:
+        psnrs = [d["image_psnr_db"] for d in items]
+        out["image_mean_psnr_db"] = sum(psnrs) / n
+        out["image_min_psnr_db"] = min(psnrs)
+    return out
 
+
+def _summarize_stratified(items: list[dict[str, Any]]) -> dict[str, Any]:
+    base = _summarize_metric_list(items)
+    t2i_items = [d for d in items if d.get("mode") == "t2i"]
+    ti2i_items = [d for d in items if d.get("mode") == "ti2i"]
+    en_items = [d for d in items if d.get("lang") == "en"]
+    zh_items = [d for d in items if d.get("lang") == "zh"]
+    by_dom: dict[str, list[dict[str, Any]]] = {}
+    for d in items:
+        by_dom.setdefault(str(d.get("domain", "all")), []).append(d)
+    base["by_mode"] = {
+        "t2i": _summarize_metric_list(t2i_items),
+        "ti2i": _summarize_metric_list(ti2i_items),
+    }
+    base["by_lang"] = {
+        "en": _summarize_metric_list(en_items),
+        "zh": _summarize_metric_list(zh_items),
+    }
+    base["per_domain"] = {dom: _summarize_metric_list(d_items) for dom, d_items in by_dom.items()}
+    return base
+
+
+def _capture_suite_teacher_references(
+    base_pipe: Any,
+    fixture_dir: Path,
+    rows: list[dict[str, Any]],
+    *,
+    traj_per_domain: int = 1,
+    probe_res: int = 512,
+    total_steps: int = 8,
+    seed_base: int = 42,
+    device: torch.device,
+) -> dict[str, Any]:
+    """Capture BF16 teacher prompt embeddings across all `rows`, plus single-step teacher
+    velocities and full end-to-end trajectories on `traj_per_domain` rows per domain."""
+    traj_rows = select_stratified_image_gen_rows(rows, per_domain=traj_per_domain)
+    traj_keys = {(r["domain"], r["source_row"], r["prompt_sha256"]) for r in traj_rows}
+
+    teacher_embeds: list[tuple[dict[str, Any], torch.Tensor]] = []
+    teacher_velocities: list[tuple[dict[str, Any], dict[str, Any], torch.Tensor]] = []
+    teacher_trajectories: list[tuple[dict[str, Any], int, int, int, torch.Tensor, Any]] = []
+
+    with torch.no_grad():
+        for r_idx, row in enumerate(rows):
+            cond_pil = load_condition_pil_image(fixture_dir, row, target_resolution=probe_res)
+            cond_img = [cond_pil] if cond_pil is not None else None
+            pe, _, _ = base_pipe.encode_prompt(prompt=row["prompt"], image=cond_img, device=device)
+            teacher_embeds.append((row, pe.detach().cpu()))
+
+            r_key = (row["domain"], row["source_row"], row["prompt_sha256"])
+            if r_key not in traj_keys:
+                continue
+
+            w_p, h_p = _calculate_32_aligned_dimensions(
+                probe_res * probe_res, float(row["width"]) / float(row["height"])
+            )
+            target_latents_len = (h_p // base_pipe.vae_scale_factor) * (w_p // base_pipe.vae_scale_factor)
+            step_idx = [0]
+            capture_steps = (0, total_steps // 2, total_steps - 1)
+
+            def _tr_hook(
+                _m: nn.Module,
+                _a: tuple[Any, ...],
+                kw: dict[str, Any],
+                out: Any,
+                _si: list[int] = step_idx,
+                _row: dict[str, Any] = row,
+                _tlen: int = target_latents_len,
+                _cs: tuple[int, ...] = capture_steps,
+            ):
+                if _si[0] in _cs:
+                    v_out = out[0] if isinstance(out, tuple) else out.sample
+                    v_target = v_out[:, -_tlen:]
+                    teacher_velocities.append(
+                        (
+                            _row,
+                            {
+                                "hidden_states": kw["hidden_states"].detach().cpu(),
+                                "timestep": kw["timestep"].detach().cpu(),
+                                "encoder_hidden_states": kw["encoder_hidden_states"].detach().cpu(),
+                                "encoder_hidden_states_mask": (
+                                    kw["encoder_hidden_states_mask"].detach().cpu()
+                                    if kw.get("encoder_hidden_states_mask") is not None
+                                    else None
+                                ),
+                                "img_shapes": copy.deepcopy(kw["img_shapes"]),
+                                "img_mask": kw["img_mask"].detach().cpu(),
+                                "target_latents_len": _tlen,
+                            },
+                            v_target.detach().cpu(),
+                        )
+                    )
+                _si[0] += 1
+
+            hk = base_pipe.transformer.register_forward_hook(_tr_hook, with_kwargs=True)
+            try:
+                seed = seed_base + r_idx
+                gen = torch.Generator(device=device).manual_seed(seed)
+                call_kw: dict[str, Any] = {
+                    "prompt": row["prompt"],
+                    "height": h_p,
+                    "width": w_p,
+                    "output_resolution": probe_res,
+                    "generator": gen,
+                    "use_kv_cache": False,
+                    "output_type": "latent",
+                }
+                if base_pipe.config.sample_sigmas is None:
+                    call_kw["num_inference_steps"] = total_steps
+                if cond_img is not None:
+                    call_kw["image"] = cond_img
+                lat_out = base_pipe(**call_kw).images
+                unpacked = base_pipe._unpack_latents(lat_out, h_p, w_p, base_pipe.vae_scale_factor).to(
+                    base_pipe.vae.dtype
+                )
+                l_mean = (
+                    torch.tensor(base_pipe.vae.config.latents_mean)
+                    .view(1, base_pipe.vae.config.z_dim, 1, 1, 1)
+                    .to(unpacked.device, unpacked.dtype)
+                )
+                l_std = (
+                    torch.tensor(base_pipe.vae.config.latents_std)
+                    .view(1, base_pipe.vae.config.z_dim, 1, 1, 1)
+                    .to(unpacked.device, unpacked.dtype)
+                )
+                dec = base_pipe.vae.decode(unpacked * l_std + l_mean, return_dict=False)[0][:, :, 0]
+                pil_img = base_pipe.image_processor.postprocess(dec, output_type="pil")[0]
+                teacher_trajectories.append((row, seed, w_p, h_p, lat_out.detach().cpu(), pil_img))
+            finally:
+                hk.remove()
+
+    return {
+        "embeds": teacher_embeds,
+        "velocities": teacher_velocities,
+        "trajectories": teacher_trajectories,
+    }
+
+
+def _evaluate_suite_against_teacher(
+    q_pipe: Any,
+    fixture_dir: Path,
+    teacher_refs: dict[str, Any],
+    *,
+    probe_res: int = 512,
+    total_steps: int = 8,
+    device: torch.device,
+) -> dict[str, Any]:
+    embed_metrics: list[dict[str, Any]] = []
+    txt_in_metrics: list[dict[str, Any]] = []
+    vel_metrics: list[dict[str, Any]] = []
+    traj_metrics: list[dict[str, Any]] = []
+
+    with torch.no_grad():
+        for row, ref_pe in teacher_refs["embeds"]:
+            cond_pil = load_condition_pil_image(fixture_dir, row, target_resolution=probe_res)
+            cond_img = [cond_pil] if cond_pil is not None else None
+            q_pe, _, _ = q_pipe.encode_prompt(prompt=row["prompt"], image=cond_img, device=device)
+            m = _compute_psnr_and_cosine(q_pe.cpu(), ref_pe)
+            m.update(domain=row["domain"], mode=row["mode"], lang=row["lang"])
+            embed_metrics.append(m)
+            if hasattr(q_pipe, "transformer") and hasattr(q_pipe.transformer, "txt_in"):
+                ref_ti = q_pipe.transformer.txt_in(ref_pe.to(device=device, dtype=q_pe.dtype)).cpu()
+                q_ti = q_pipe.transformer.txt_in(q_pe).cpu()
+                m_ti = _compute_psnr_and_cosine(q_ti, ref_ti)
+                m_ti.update(domain=row["domain"], mode=row["mode"], lang=row["lang"])
+                txt_in_metrics.append(m_ti)
+
+        for row, kw_in, ref_v in teacher_refs["velocities"]:
+            q_v = q_pipe.transformer(
+                hidden_states=kw_in["hidden_states"].to(device, dtype=torch.bfloat16),
+                timestep=kw_in["timestep"].to(device, dtype=torch.bfloat16),
+                encoder_hidden_states=kw_in["encoder_hidden_states"].to(device, dtype=torch.bfloat16),
+                encoder_hidden_states_mask=(
+                    kw_in["encoder_hidden_states_mask"].to(device)
+                    if kw_in["encoder_hidden_states_mask"] is not None
+                    else None
+                ),
+                img_shapes=kw_in["img_shapes"],
+                img_mask=kw_in["img_mask"].to(device),
+                return_dict=False,
+            )[0]
+            tlen = kw_in["target_latents_len"]
+            m = _compute_psnr_and_cosine(q_v[:, -tlen:].cpu(), ref_v)
+            m.update(domain=row["domain"], mode=row["mode"], lang=row["lang"])
+            vel_metrics.append(m)
+
+        for row, seed, w_p, h_p, ref_lat, ref_pil in teacher_refs["trajectories"]:
+            cond_pil = load_condition_pil_image(fixture_dir, row, target_resolution=probe_res)
+            cond_img = [cond_pil] if cond_pil is not None else None
+            gen = torch.Generator(device=device).manual_seed(seed)
+            call_kw: dict[str, Any] = {
+                "prompt": row["prompt"],
+                "height": h_p,
+                "width": w_p,
+                "output_resolution": probe_res,
+                "generator": gen,
+                "use_kv_cache": False,
+                "output_type": "latent",
+            }
+            if q_pipe.config.sample_sigmas is None:
+                call_kw["num_inference_steps"] = total_steps
+            if cond_img is not None:
+                call_kw["image"] = cond_img
+            q_lat = q_pipe(**call_kw).images
+            m = _compute_psnr_and_cosine(q_lat.cpu(), ref_lat)
+            unpacked = q_pipe._unpack_latents(q_lat, h_p, w_p, q_pipe.vae_scale_factor).to(q_pipe.vae.dtype)
+            l_mean = (
+                torch.tensor(q_pipe.vae.config.latents_mean)
+                .view(1, q_pipe.vae.config.z_dim, 1, 1, 1)
+                .to(unpacked.device, unpacked.dtype)
+            )
+            l_std = (
+                torch.tensor(q_pipe.vae.config.latents_std)
+                .view(1, q_pipe.vae.config.z_dim, 1, 1, 1)
+                .to(unpacked.device, unpacked.dtype)
+            )
+            dec = q_pipe.vae.decode(unpacked * l_std + l_mean, return_dict=False)[0][:, :, 0]
+            q_pil = q_pipe.image_processor.postprocess(dec, output_type="pil")[0]
+            m["image_psnr_db"] = _compute_image_psnr(q_pil, ref_pil)
+            m.update(domain=row["domain"], mode=row["mode"], lang=row["lang"], width=w_p, height=h_p)
+            traj_metrics.append(m)
+
+    e2e_summary = _summarize_stratified(traj_metrics)
+    out_summary: dict[str, Any] = {
+        "text_encoder_prompt_embeds": _summarize_stratified(embed_metrics),
+        "teacher_forced_velocity": {
+            "samples": len(vel_metrics),
+            **_summarize_stratified(vel_metrics),
+        },
+        "end_to_end_trajectory": {
+            "trajectories": len(traj_metrics),
+            "latent_mean_cosine": e2e_summary["mean_cosine"],
+            "latent_mean_rel_rmse": e2e_summary["mean_rel_rmse"],
+            "latent_mean_sqnr_db": e2e_summary["mean_sqnr_db"],
+            "image_mean_psnr_db": e2e_summary.get("image_mean_psnr_db", 0.0),
+            "image_min_psnr_db": e2e_summary.get("image_min_psnr_db", 0.0),
+            "by_mode": e2e_summary["by_mode"],
+            "by_lang": e2e_summary["by_lang"],
+            "per_domain": e2e_summary["per_domain"],
+        },
+    }
+    if txt_in_metrics:
+        out_summary["txt_in_conditioning_embeds"] = _summarize_stratified(txt_in_metrics)
+    return out_summary
+
+
+def run_probe_qwen_image(args: argparse.Namespace) -> None:
+    """Evaluate a quantized Qwen-Image-2.1 / Qwen-Image-2.1-Turbo checkpoint against its BF16 teacher
+    on `data/image-gen-probe-v1` (64 rows across 16 T2I/TI2I EN+ZH domains) and `data/image-gen-guard-v1`
+    (24 OOD rows across 6 T2I/TI2I domains):
+    1. Held-out `text_encoder` prompt_embeds fidelity (all 64 probe + 24 guard rows),
+    2. Single-step teacher-forced DiT velocity prediction fidelity across denoising timesteps
+       (48 probe + 18 guard velocity evaluations across 5 aspect ratios and TI2I condition latents),
+    3. Full deterministic trajectory latent & decoded RGB image PSNR / cosine / SQNR
+       (16 probe + 6 guard trajectories)."""
     hub_id, info = resolve(args.model)
     base_dir = (
         Path(hub_id)
@@ -1469,17 +2088,32 @@ def run_probe_qwen_image(args: argparse.Namespace) -> None:
     )
     dev = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    vision_probe_dir = Path(args.eval_vision or "data/vision-probe-v2")
-    if (vision_probe_dir / "manifest.json").is_file():
-        m = json.loads((vision_probe_dir / "manifest.json").read_text())
-        if m.get("calibration", False):
-            raise ValueError(f"Refusing to evaluate Qwen-Image on calibration fixture {vision_probe_dir}")
-    probe_imgs: list[Image.Image] = []
-    if (vision_probe_dir / "images").is_dir():
-        for p in sorted((vision_probe_dir / "images").glob("*.image"))[:2]:
-            probe_imgs.append(Image.open(p).convert("RGB"))
+    raw_probe = getattr(args, "eval_vision", None)
+    probe_dir = (
+        Path(raw_probe)
+        if raw_probe and Path(raw_probe).name != "vision-probe-v2"
+        else Path("data/image-gen-probe-v1")
+    )
+    probe_manifest, probe_rows = load_image_gen_rows(probe_dir, require_calibration=False)
 
-    log_event("QWEN_IMAGE_PROBE_BASE_LOAD", base=str(base_dir))
+    raw_guard = getattr(args, "eval_vision_guard", None)
+    guard_dir = (
+        Path(raw_guard)
+        if raw_guard and Path(raw_guard).name != "vision-guard-v2"
+        else Path("data/image-gen-guard-v1")
+    )
+    guard_manifest, guard_rows = load_image_gen_rows(guard_dir, require_calibration=False, require_guard=True)
+
+    if getattr(args, "limit", None):
+        probe_rows = probe_rows[: int(args.limit)]
+        guard_rows = guard_rows[: min(int(args.limit), len(guard_rows))]
+
+    log_event(
+        "QWEN_IMAGE_PROBE_BASE_LOAD",
+        base=str(base_dir),
+        probe_rows=len(probe_rows),
+        guard_rows=len(guard_rows),
+    )
     base_pipe = load_qwen_image_pipeline(
         base_dir,
         device=dev,
@@ -1488,92 +2122,29 @@ def run_probe_qwen_image(args: argparse.Namespace) -> None:
         keep_transformer_compressed=False,
     )
 
-    # 1. Capture teacher prompt_embeds, teacher single-step velocities, and teacher full trajectories
-    teacher_embeds: list[torch.Tensor] = []
-    teacher_velocities: list[tuple[dict[str, Any], torch.Tensor]] = []
-    teacher_trajectories: list[tuple[torch.Tensor, Image.Image]] = []
-
-    all_probe_cases: list[tuple[str, list[Image.Image] | None]] = [(p, None) for p in PROBE_PROMPTS_T2I]
-    for i, ep in enumerate(PROBE_PROMPTS_EDIT):
-        if probe_imgs:
-            all_probe_cases.append((ep, [probe_imgs[i % len(probe_imgs)]]))
-
     total_steps = 8 if base_pipe.config.sample_sigmas is not None else 16
     probe_res = 512
 
-    with torch.no_grad():
-        for c_idx, (prompt, cond_img) in enumerate(all_probe_cases):
-            pe, _, _ = base_pipe.encode_prompt(prompt=prompt, image=cond_img, device=dev)
-            teacher_embeds.append(pe.detach().cpu())
-
-            step_idx = [0]
-
-            def _tr_hook(
-                _m: nn.Module,
-                _a: tuple[Any, ...],
-                kw: dict[str, Any],
-                out: Any,
-                _si: list[int] = step_idx,
-                _ci: int = c_idx,
-            ):
-                if _si[0] in (0, total_steps // 2, total_steps - 1) and _ci < 4:
-                    v_out = out[0] if isinstance(out, tuple) else out.sample
-                    teacher_velocities.append(
-                        (
-                            {
-                                "hidden_states": kw["hidden_states"].detach().cpu(),
-                                "timestep": kw["timestep"].detach().cpu(),
-                                "encoder_hidden_states": kw["encoder_hidden_states"].detach().cpu(),
-                                "encoder_hidden_states_mask": (
-                                    kw["encoder_hidden_states_mask"].detach().cpu()
-                                    if kw.get("encoder_hidden_states_mask") is not None
-                                    else None
-                                ),
-                                "img_shapes": copy.deepcopy(kw["img_shapes"]),
-                                "img_mask": kw["img_mask"].detach().cpu(),
-                            },
-                            v_out.detach().cpu(),
-                        )
-                    )
-                _si[0] += 1
-
-            hk = base_pipe.transformer.register_forward_hook(_tr_hook, with_kwargs=True)
-            try:
-                gen = torch.Generator(device=dev).manual_seed(42 + c_idx)
-                call_kw: dict[str, Any] = {
-                    "prompt": prompt,
-                    "height": probe_res,
-                    "width": probe_res,
-                    "output_resolution": probe_res,
-                    "generator": gen,
-                    "use_kv_cache": False,
-                    "output_type": "latent",
-                }
-                if base_pipe.config.sample_sigmas is None:
-                    call_kw["num_inference_steps"] = total_steps
-                if cond_img is not None:
-                    call_kw["image"] = cond_img
-                lat_out = base_pipe(**call_kw).images
-                # Decode latents with VAE for PSNR comparison
-                unpacked = base_pipe._unpack_latents(
-                    lat_out, probe_res, probe_res, base_pipe.vae_scale_factor
-                )
-                unpacked = unpacked.to(base_pipe.vae.dtype)
-                l_mean = (
-                    torch.tensor(base_pipe.vae.config.latents_mean)
-                    .view(1, base_pipe.vae.config.z_dim, 1, 1, 1)
-                    .to(unpacked.device, unpacked.dtype)
-                )
-                l_std = (
-                    torch.tensor(base_pipe.vae.config.latents_std)
-                    .view(1, base_pipe.vae.config.z_dim, 1, 1, 1)
-                    .to(unpacked.device, unpacked.dtype)
-                )
-                dec = base_pipe.vae.decode(unpacked * l_std + l_mean, return_dict=False)[0][:, :, 0]
-                pil_img = base_pipe.image_processor.postprocess(dec, output_type="pil")[0]
-                teacher_trajectories.append((lat_out.detach().cpu(), pil_img))
-            finally:
-                hk.remove()
+    teacher_probe = _capture_suite_teacher_references(
+        base_pipe,
+        probe_dir,
+        probe_rows,
+        traj_per_domain=1,
+        probe_res=probe_res,
+        total_steps=total_steps,
+        seed_base=42,
+        device=dev,
+    )
+    teacher_guard = _capture_suite_teacher_references(
+        base_pipe,
+        guard_dir,
+        guard_rows,
+        traj_per_domain=1,
+        probe_res=probe_res,
+        total_steps=total_steps,
+        seed_base=2042,
+        device=dev,
+    )
 
     del base_pipe
     gc.collect()
@@ -1588,69 +2159,22 @@ def run_probe_qwen_image(args: argparse.Namespace) -> None:
             keep_text_encoder_compressed=False,
             keep_transformer_compressed=False,
         )
-        embed_metrics = []
-        vel_metrics = []
-        lat_metrics = []
-        img_psnrs = []
-
-        with torch.no_grad():
-            for c_idx, (prompt, cond_img) in enumerate(all_probe_cases):
-                q_pe, _, _ = q_pipe.encode_prompt(prompt=prompt, image=cond_img, device=dev)
-                embed_metrics.append(_compute_psnr_and_cosine(q_pe.cpu(), teacher_embeds[c_idx]))
-
-                gen = torch.Generator(device=dev).manual_seed(42 + c_idx)
-                call_kw = {
-                    "prompt": prompt,
-                    "height": probe_res,
-                    "width": probe_res,
-                    "output_resolution": probe_res,
-                    "generator": gen,
-                    "use_kv_cache": False,
-                    "output_type": "latent",
-                }
-                if q_pipe.config.sample_sigmas is None:
-                    call_kw["num_inference_steps"] = total_steps
-                if cond_img is not None:
-                    call_kw["image"] = cond_img
-                q_lat = q_pipe(**call_kw).images
-                ref_lat, ref_pil = teacher_trajectories[c_idx]
-                lat_metrics.append(_compute_psnr_and_cosine(q_lat.cpu(), ref_lat))
-
-                unpacked = q_pipe._unpack_latents(q_lat, probe_res, probe_res, q_pipe.vae_scale_factor).to(
-                    q_pipe.vae.dtype
-                )
-                l_mean = (
-                    torch.tensor(q_pipe.vae.config.latents_mean)
-                    .view(1, q_pipe.vae.config.z_dim, 1, 1, 1)
-                    .to(unpacked.device, unpacked.dtype)
-                )
-                l_std = (
-                    torch.tensor(q_pipe.vae.config.latents_std)
-                    .view(1, q_pipe.vae.config.z_dim, 1, 1, 1)
-                    .to(unpacked.device, unpacked.dtype)
-                )
-                dec = q_pipe.vae.decode(unpacked * l_std + l_mean, return_dict=False)[0][:, :, 0]
-                q_pil = q_pipe.image_processor.postprocess(dec, output_type="pil")[0]
-                img_psnrs.append(_compute_image_psnr(q_pil, ref_pil))
-
-            for kw_in, ref_v in teacher_velocities:
-                q_v = q_pipe.transformer(
-                    hidden_states=kw_in["hidden_states"].to(dev, dtype=torch.bfloat16),
-                    timestep=kw_in["timestep"].to(dev, dtype=torch.bfloat16),
-                    encoder_hidden_states=kw_in["encoder_hidden_states"].to(dev, dtype=torch.bfloat16),
-                    encoder_hidden_states_mask=(
-                        kw_in["encoder_hidden_states_mask"].to(dev)
-                        if kw_in["encoder_hidden_states_mask"] is not None
-                        else None
-                    ),
-                    img_shapes=kw_in["img_shapes"],
-                    img_mask=kw_in["img_mask"].to(dev),
-                    return_dict=False,
-                )[0]
-                vel_metrics.append(_compute_psnr_and_cosine(q_v.cpu(), ref_v))
-
-        def _avg(items: list[dict[str, float]], key: str) -> float:
-            return sum(d[key] for d in items) / max(len(items), 1)
+        probe_eval = _evaluate_suite_against_teacher(
+            q_pipe,
+            probe_dir,
+            teacher_probe,
+            probe_res=probe_res,
+            total_steps=total_steps,
+            device=dev,
+        )
+        guard_eval = _evaluate_suite_against_teacher(
+            q_pipe,
+            guard_dir,
+            teacher_guard,
+            probe_res=probe_res,
+            total_steps=total_steps,
+            device=dev,
+        )
 
         total_bytes = sum(p.stat().st_size for p in quant_dir.rglob("*.safetensors"))
         result = {
@@ -1659,27 +2183,24 @@ def run_probe_qwen_image(args: argparse.Namespace) -> None:
             "quant": str(quant_dir),
             "total_safetensors_bytes": total_bytes,
             "total_safetensors_gib": round(total_bytes / (1024**3), 3),
-            "probe_cases": len(all_probe_cases),
+            "probe_suite": {
+                "dir": str(probe_dir),
+                "rows": len(probe_rows),
+                "rows_sha256": probe_manifest.get("rows_sha256"),
+            },
+            "guard_suite": {
+                "dir": str(guard_dir),
+                "rows": len(guard_rows),
+                "rows_sha256": guard_manifest.get("rows_sha256"),
+            },
+            "probe_cases": len(probe_rows),
+            "guard_cases": len(guard_rows),
             "probe_resolution": probe_res,
             "num_inference_steps": total_steps,
-            "text_encoder_prompt_embeds": {
-                "mean_cosine": _avg(embed_metrics, "cosine"),
-                "mean_rel_rmse": _avg(embed_metrics, "rel_rmse"),
-                "mean_sqnr_db": _avg(embed_metrics, "sqnr_db"),
-            },
-            "teacher_forced_velocity": {
-                "samples": len(vel_metrics),
-                "mean_cosine": _avg(vel_metrics, "cosine"),
-                "mean_rel_rmse": _avg(vel_metrics, "rel_rmse"),
-                "mean_sqnr_db": _avg(vel_metrics, "sqnr_db"),
-            },
-            "end_to_end_trajectory": {
-                "latent_mean_cosine": _avg(lat_metrics, "cosine"),
-                "latent_mean_rel_rmse": _avg(lat_metrics, "rel_rmse"),
-                "latent_mean_sqnr_db": _avg(lat_metrics, "sqnr_db"),
-                "image_mean_psnr_db": sum(img_psnrs) / max(len(img_psnrs), 1),
-                "image_min_psnr_db": min(img_psnrs) if img_psnrs else 0.0,
-            },
+            "text_encoder_prompt_embeds": probe_eval["text_encoder_prompt_embeds"],
+            "teacher_forced_velocity": probe_eval["teacher_forced_velocity"],
+            "end_to_end_trajectory": probe_eval["end_to_end_trajectory"],
+            "image_gen_guard_v1": guard_eval,
         }
         out_json = (
             Path(args.output_json)
@@ -1688,7 +2209,12 @@ def run_probe_qwen_image(args: argparse.Namespace) -> None:
         )
         out_json.write_text(json.dumps(result, indent=2) + "\n")
         log_event(
-            "QWEN_IMAGE_PROBE_DONE", **result["teacher_forced_velocity"], **result["end_to_end_trajectory"]
+            "QWEN_IMAGE_PROBE_DONE",
+            vel_cosine=result["teacher_forced_velocity"]["mean_cosine"],
+            vel_sqnr_db=result["teacher_forced_velocity"]["mean_sqnr_db"],
+            img_psnr_db=result["end_to_end_trajectory"]["image_mean_psnr_db"],
+            guard_vel_cosine=guard_eval["teacher_forced_velocity"]["mean_cosine"],
+            guard_img_psnr_db=guard_eval["end_to_end_trajectory"]["image_mean_psnr_db"],
         )
         del q_pipe
         gc.collect()

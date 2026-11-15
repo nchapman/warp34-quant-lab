@@ -19,5 +19,8 @@ build/
 /data/vision-calib-v2/
 /data/vision-probe-v2/
 /data/vision-guard-v2/
+/data/image-gen-calib-v1/
+/data/image-gen-probe-v1/
+/data/image-gen-guard-v1/
 /Qwen3*/
 /*.safetensors

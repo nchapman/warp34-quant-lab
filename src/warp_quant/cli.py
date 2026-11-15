@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 from pathlib import Path
 
-from warp_quant.data import prepare_v2_vision_split
+from warp_quant.data import prepare_image_gen_split, prepare_v2_vision_split
 from warp_quant.hadamard_gptq import run_probe, run_quantize
 from warp_quant.lablog import log_event, run_done, run_fail
 from warp_quant.models import MODELS, quant_recipe
@@ -46,6 +47,32 @@ def _run_build_vision_data(args: argparse.Namespace) -> None:
     run_done(data_dir=str(base_dir))
 
 
+def _run_build_image_data(args: argparse.Namespace) -> None:
+    base_dir = Path(args.data_dir)
+    if not base_dir.is_absolute():
+        base_dir = ROOT / base_dir
+    splits = (
+        [
+            ("image-gen-calib-v1", "calibration"),
+            ("image-gen-probe-v1", "probe"),
+            ("image-gen-guard-v1", "guard"),
+        ]
+        if args.split == "all"
+        else [(f"image-gen-{args.split}-v1", "calibration" if args.split == "calib" else args.split)]
+    )
+    for folder, split_name in splits:
+        target = base_dir / folder
+        if (target / "manifest.json").is_file() and (target / "rows.jsonl").is_file():
+            print(f"[skip] {target} already exists")
+            continue
+        if target.exists():
+            shutil.rmtree(target)
+        log_event("IMAGE_GEN_DATA_BUILD", target=str(target), split=split_name)
+        prepare_image_gen_split(target, split=split_name)
+        print(f"[ok] built {target} ({split_name})")
+    run_done(data_dir=str(base_dir))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="warp-quant",
@@ -65,6 +92,18 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["all", "calib", "probe", "guard"],
         default="all",
         help="Which v2 vision fixture split(s) to materialize",
+    )
+
+    bi = sub.add_parser(
+        "build-image-data",
+        help="Materialize disjoint image-gen-calib-v1 (96), image-gen-probe-v1 (64), and image-gen-guard-v1 (24) T2I/TI2I fixtures",
+    )
+    bi.add_argument("--data-dir", default="data", help="Parent directory for image-gen-*-v1 folders")
+    bi.add_argument(
+        "--split",
+        choices=["all", "calib", "probe", "guard"],
+        default="all",
+        help="Which image-gen-v1 fixture split(s) to materialize",
     )
 
     q = sub.add_parser(
@@ -343,6 +382,8 @@ def main(argv: list[str] | None = None) -> None:
             _run_list_models()
         elif args.cmd == "build-vision-data":
             _run_build_vision_data(args)
+        elif args.cmd == "build-image-data":
+            _run_build_image_data(args)
         elif args.cmd == "quantize":
             run_quantize(args)
         elif args.cmd == "probe":

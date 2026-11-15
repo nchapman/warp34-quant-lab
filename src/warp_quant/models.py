@@ -267,6 +267,11 @@ MODELS: dict[str, dict[str, Any]] = {
             "https://huggingface.co/Qwen/Qwen-Image-2.1/blob/d26bb61231c349cf6b7896fa83353113880e1ba3/LICENSE"
         ),
         "license_files": ["LICENSE"],
+        "recipe": {
+            "calib": "data/image-gen-calib-v1",
+            "num_samples": 96,
+            "quantize_mtp": False,
+        },
         "quant_repo": "nchapman/Qwen-Image-2.1-W4A16-HGPTQ",
     },
     "qwen-image-2.1-turbo": {
@@ -287,6 +292,11 @@ MODELS: dict[str, dict[str, Any]] = {
             "fc13ba1986fcb905854dc8de2f52eee395f49b5b/LICENSE"
         ),
         "license_files": ["LICENSE"],
+        "recipe": {
+            "calib": "data/image-gen-calib-v1",
+            "num_samples": 96,
+            "quantize_mtp": False,
+        },
         "quant_repo": "nchapman/Qwen-Image-2.1-Turbo-W4A16-HGPTQ",
     },
     "0.8b-abliterated": {

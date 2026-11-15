@@ -3,21 +3,24 @@
 from __future__ import annotations
 
 import copy
+import csv
 import hashlib
 import io
 import json
 import math
 import random
+import shutil
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
 import torch.nn.functional as F
 from datasets import Dataset
 from huggingface_hub import hf_hub_download
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from torch import nn
 from transformers.models.qwen3_5.modeling_qwen3_5 import (
     Qwen3_5DecoderLayer,
@@ -592,6 +595,441 @@ def prepare_v2_vision_split(output: str | Path, split: str = "probe") -> Path:
         "split": split,
         "sources": provenance,
         "rows": len(records),
+        "rows_sha256": sha256(rows_path),
+        "selection": selection_desc,
+        "calibration": split == "calibration",
+        "guard": split == "guard",
+    }
+    (out / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return out
+
+
+SOURCES_IMAGE_GEN_V1_CORE = (
+    (
+        "oneig_en",
+        "OneIG-Bench/OneIG-Bench",
+        "f80e6317806bf0b1d92da3113633a62451b0fd4f",
+        "OneIG-Bench.json",
+    ),
+    (
+        "oneig_zh",
+        "OneIG-Bench/OneIG-Bench",
+        "f80e6317806bf0b1d92da3113633a62451b0fd4f",
+        "OneIG-Bench-ZH.json",
+    ),
+    (
+        "dpg_bench",
+        "Jialuo21/DPG-Bench",
+        "f7f1626d7a5f0a4dc062c3d9715959325d5039bd",
+        "data/test-00000-of-00001.parquet",
+    ),
+    (
+        "parti_prompts",
+        "nateraw/parti-prompts",
+        "944b156abfdad7627c3221b5ec4f6a6fb060a197",
+        "PartiPrompts.tsv",
+    ),
+    (
+        "gedit_shard0",
+        "stepfun-ai/GEdit-Bench",
+        "50766778e2a737474c7e9bdf84cdce82c3ea3f4f",
+        "data-00000-of-00009.arrow",
+    ),
+    (
+        "gedit_shard2",
+        "stepfun-ai/GEdit-Bench",
+        "50766778e2a737474c7e9bdf84cdce82c3ea3f4f",
+        "data-00002-of-00009.arrow",
+    ),
+    (
+        "gedit_shard4",
+        "stepfun-ai/GEdit-Bench",
+        "50766778e2a737474c7e9bdf84cdce82c3ea3f4f",
+        "data-00004-of-00009.arrow",
+    ),
+    (
+        "gedit_shard7",
+        "stepfun-ai/GEdit-Bench",
+        "50766778e2a737474c7e9bdf84cdce82c3ea3f4f",
+        "data-00007-of-00009.arrow",
+    ),
+)
+
+SOURCES_IMAGE_GEN_V1_GUARD = (
+    (
+        "magicbrush_dev0",
+        "osunlp/MagicBrush",
+        "6c254560879df7851233ea0fd2ae2a62764d0ef2",
+        "data/dev-00000-of-00004-f147d414270a90e1.parquet",
+    ),
+    (
+        "gedit_shard8",
+        "stepfun-ai/GEdit-Bench",
+        "50766778e2a737474c7e9bdf84cdce82c3ea3f4f",
+        "data-00008-of-00009.arrow",
+    ),
+)
+
+IMAGE_GEN_V1_IN_DIST_DOMAINS = (
+    "oneig_en_text",
+    "oneig_en_knowledge",
+    "oneig_en_portrait",
+    "oneig_en_general",
+    "oneig_en_anime",
+    "dpg_dense_en",
+    "parti_writing_complex",
+    "oneig_zh_text",
+    "oneig_zh_multilingual",
+    "oneig_zh_knowledge",
+    "oneig_zh_portrait",
+    "oneig_zh_general_anime",
+    "gedit_text_change",
+    "gedit_subject_style",
+    "gedit_human_motion",
+    "gedit_scene_color",
+)
+
+IMAGE_GEN_V1_GUARD_DOMAINS = (
+    "parti_world_knowledge",
+    "parti_arts_illustrations",
+    "parti_vehicles_artifacts",
+    "parti_animals_food",
+    "magicbrush_edit",
+    "gedit_tone_transfer",
+)
+
+IMAGE_GEN_V1_ASPECT_RATIOS: tuple[tuple[int, int], ...] = (
+    (1024, 1024),
+    (1344, 768),
+    (768, 1344),
+    (1152, 896),
+    (896, 1152),
+)
+
+_ONEIG_EN_MAP = {
+    "Text_Rendering": "oneig_en_text",
+    "Knowledge_Reasoning": "oneig_en_knowledge",
+    "Portrait": "oneig_en_portrait",
+    "General_Object": "oneig_en_general",
+    "Anime_Stylization": "oneig_en_anime",
+}
+
+_ONEIG_ZH_MAP = {
+    "Text_Rendering": "oneig_zh_text",
+    "Multilingualism": "oneig_zh_multilingual",
+    "Knowledge_Reasoning": "oneig_zh_knowledge",
+    "Portrait": "oneig_zh_portrait",
+    "General_Object": "oneig_zh_general_anime",
+    "Anime_Stylization": "oneig_zh_general_anime",
+}
+
+_PARTI_IN_DIST_CHALLENGES = frozenset(
+    {
+        "Writing & Symbols",
+        "Complex",
+        "Linguistic Structures",
+        "Properties & Positioning",
+    }
+)
+
+
+def _calculate_32_aligned_dimensions(target_area: int, ratio: float) -> tuple[int, int]:
+    width = math.sqrt(float(target_area) * float(ratio))
+    height = width / float(ratio)
+    return max(32, int(round(width / 32.0) * 32)), max(32, int(round(height / 32.0) * 32))
+
+
+def _read_arrow_stream(path: str | Path) -> list[dict[str, Any]]:
+    with pa.memory_map(str(path), "r") as source:
+        return pa.ipc.open_stream(source).read_all().to_pylist()
+
+
+def _select_image_gen_split(
+    candidates: list[tuple[str, str, int, bytes | None, str, str]],
+    seed_tag: str,
+    budgets: dict[str, int],
+    domain_order: tuple[str, ...],
+    seen: set[str],
+    min_dim: int = 128,
+) -> list[dict[str, Any]]:
+    by_dom: dict[str, list[tuple[str, str, int, str, bytes | None, int | None, int | None, str, str]]] = (
+        defaultdict(list)
+    )
+    for dom, cat, idx, blob, prompt, lang in candidates:
+        if dom not in budgets:
+            continue
+        p_clean = prompt.strip()
+        if len(p_clean) < 8:
+            continue
+        if blob is not None:
+            img_digest = hashlib.sha256(blob).hexdigest()
+            if img_digest in seen:
+                continue
+            try:
+                with Image.open(io.BytesIO(blob)) as image:
+                    src_w, src_h = image.size
+                    image.verify()
+            except (UnidentifiedImageError, OSError, SyntaxError):
+                continue
+            if min(src_w, src_h) < min_dim:
+                continue
+            digest = img_digest
+        else:
+            src_w, src_h = None, None
+            digest = hashlib.sha256(p_clean.encode("utf-8")).hexdigest()
+            if digest in seen:
+                continue
+        rk = hashlib.sha256(f"{seed_tag}:{dom}:{lang}:{digest}:{idx}".encode()).hexdigest()
+        by_dom[dom].append((rk, cat, idx, digest, blob, src_w, src_h, p_clean, lang))
+
+    picked_records: list[dict[str, Any]] = []
+    for d_idx, dom in enumerate(domain_order):
+        budget = budgets.get(dom, 0)
+        pool = sorted(by_dom.get(dom, []), key=lambda x: x[0])
+        langs_present = {item[8] for item in pool}
+        is_bilingual = "en" in langs_present and "zh" in langs_present
+
+        dom_picked: list[tuple[str, str, int, str, bytes | None, int | None, int | None, str, str]] = []
+        if is_bilingual:
+            en_pool = [it for it in pool if it[8] == "en"]
+            zh_pool = [it for it in pool if it[8] == "zh"]
+            first_pool, second_pool = (en_pool, zh_pool) if d_idx % 2 == 0 else (zh_pool, en_pool)
+            i1, i2 = 0, 0
+            while len(dom_picked) < budget and (i1 < len(first_pool) or i2 < len(second_pool)):
+                take_first = (len(dom_picked) % 2 == 0 and i1 < len(first_pool)) or i2 >= len(second_pool)
+                cand = first_pool[i1] if take_first else second_pool[i2]
+                if take_first:
+                    i1 += 1
+                else:
+                    i2 += 1
+                if cand[3] in seen:
+                    continue
+                seen.add(cand[3])
+                dom_picked.append(cand)
+        else:
+            for cand in pool:
+                if len(dom_picked) >= budget:
+                    break
+                if cand[3] in seen:
+                    continue
+                seen.add(cand[3])
+                dom_picked.append(cand)
+
+        if len(dom_picked) != budget:
+            raise ValueError(
+                f"incomplete image-gen-v1 {seed_tag} selection for {dom}: {len(dom_picked)} != {budget}"
+            )
+
+        for item_idx, (_, cat, idx, digest, blob, src_w, src_h, p_clean, lang) in enumerate(dom_picked):
+            if blob is not None and src_w is not None and src_h is not None:
+                width, height = _calculate_32_aligned_dimensions(1024 * 1024, src_w / src_h)
+                mode = "ti2i"
+            else:
+                width, height = IMAGE_GEN_V1_ASPECT_RATIOS[
+                    (d_idx + item_idx) % len(IMAGE_GEN_V1_ASPECT_RATIOS)
+                ]
+                mode = "t2i"
+            picked_records.append(
+                {
+                    "domain": dom,
+                    "category": cat,
+                    "mode": mode,
+                    "lang": lang,
+                    "source_row": idx,
+                    "prompt": p_clean,
+                    "prompt_sha256": hashlib.sha256(p_clean.encode("utf-8")).hexdigest(),
+                    "image": f"images/{digest}.image" if blob is not None else None,
+                    "image_sha256": digest if blob is not None else None,
+                    "source_width": src_w,
+                    "source_height": src_h,
+                    "width": width,
+                    "height": height,
+                    "_blob": blob,
+                }
+            )
+    return picked_records
+
+
+def prepare_image_gen_split(output: str | Path, split: str = "probe") -> Path:
+    """Materialize disjoint `image-gen-{calib,probe,guard}-v1` fixtures for Qwen-Image-2.1."""
+    if split not in ("probe", "calibration", "guard"):
+        raise ValueError(f"unsupported image-gen-v1 split: {split!r}")
+    out = Path(output)
+    if out.exists():
+        raise FileExistsError(f"Output directory already exists: {out}")
+    out.mkdir(parents=True, exist_ok=False)
+    try:
+        return _populate_image_gen_split(out, split=split)
+    except BaseException:
+        shutil.rmtree(out, ignore_errors=True)
+        raise
+
+
+def _populate_image_gen_split(out: Path, split: str) -> Path:
+    (out / "images").mkdir()
+
+    sources = SOURCES_IMAGE_GEN_V1_CORE + (SOURCES_IMAGE_GEN_V1_GUARD if split == "guard" else ())
+    provenance = []
+    source_paths: dict[str, str] = {}
+    for name, repo, revision, file in sources:
+        path = hf_hub_download(repo_id=repo, repo_type="dataset", revision=revision, filename=file)
+        provenance.append(
+            {"domain": name, "repo": repo, "revision": revision, "file": file, "sha256": sha256(path)}
+        )
+        source_paths[name] = path
+
+    in_dist: list[tuple[str, str, int, bytes | None, str, str]] = []
+    guard_cands: list[tuple[str, str, int, bytes | None, str, str]] = []
+
+    for idx, row in enumerate(json.loads(Path(source_paths["oneig_en"]).read_text(encoding="utf-8"))):
+        cat = str(row.get("category") or "").strip()
+        prompt = str(row.get("prompt_en") or "").strip()
+        if cat in _ONEIG_EN_MAP and prompt:
+            in_dist.append((_ONEIG_EN_MAP[cat], f"oneig_en:{cat}", idx, None, prompt, "en"))
+
+    for idx, row in enumerate(json.loads(Path(source_paths["oneig_zh"]).read_text(encoding="utf-8"))):
+        cat = str(row.get("category") or "").strip()
+        prompt = str(row.get("prompt_cn") or "").strip()
+        if cat in _ONEIG_ZH_MAP and prompt:
+            in_dist.append((_ONEIG_ZH_MAP[cat], f"oneig_zh:{cat}", idx, None, prompt, "zh"))
+
+    for idx, row in enumerate(pq.ParquetFile(source_paths["dpg_bench"]).read().to_pylist()):
+        prompt = str(row.get("prompt") or "").strip()
+        item_id = str(row.get("item_id") or idx)
+        if prompt:
+            in_dist.append(("dpg_dense_en", f"dpg_bench:{item_id}", idx, None, prompt, "en"))
+
+    with Path(source_paths["parti_prompts"]).open(encoding="utf-8") as f:
+        for idx, row in enumerate(csv.DictReader(f, delimiter="\t")):
+            prompt = str(row.get("Prompt") or "").strip()
+            cat = str(row.get("Category") or "").strip()
+            chal = str(row.get("Challenge") or "").strip()
+            if not prompt:
+                continue
+            if chal in _PARTI_IN_DIST_CHALLENGES:
+                in_dist.append(("parti_writing_complex", f"parti:{cat}:{chal}", idx, None, prompt, "en"))
+            else:
+                if cat in ("World Knowledge", "Outdoor Scenes"):
+                    guard_cands.append(
+                        ("parti_world_knowledge", f"parti:{cat}:{chal}", idx, None, prompt, "en")
+                    )
+                elif cat in ("Arts", "Illustrations"):
+                    guard_cands.append(
+                        ("parti_arts_illustrations", f"parti:{cat}:{chal}", idx, None, prompt, "en")
+                    )
+                elif cat in ("Vehicles", "Artifacts"):
+                    guard_cands.append(
+                        ("parti_vehicles_artifacts", f"parti:{cat}:{chal}", idx, None, prompt, "en")
+                    )
+                elif cat in ("Animals", "Food & Beverage"):
+                    guard_cands.append(("parti_animals_food", f"parti:{cat}:{chal}", idx, None, prompt, "en"))
+
+    gedit_shards = (
+        ("gedit_shard0", {"background_change": "gedit_scene_color", "color_alter": "gedit_scene_color"}),
+        ("gedit_shard2", {"ps_human": "gedit_human_motion", "motion_change": "gedit_human_motion"}),
+        ("gedit_shard4", {"subject-add": "gedit_subject_style", "style_change": "gedit_subject_style"}),
+        ("gedit_shard7", {"text_change": "gedit_text_change"}),
+    )
+    for shard_key, task_map in gedit_shards:
+        for idx, row in enumerate(_read_arrow_stream(source_paths[shard_key])):
+            tt = str(row.get("task_type") or "").strip()
+            if tt not in task_map:
+                continue
+            inst = str(row.get("instruction") or "").strip()
+            raw_lang = str(row.get("instruction_language") or "en").strip().lower()
+            lang = "zh" if raw_lang in ("cn", "zh") else "en"
+            img_obj = row.get("input_image_raw") or row.get("input_image")
+            blob = img_obj["bytes"] if isinstance(img_obj, dict) else img_obj
+            if inst and isinstance(blob, bytes):
+                in_dist.append((task_map[tt], f"gedit:{tt}:{lang}", idx, blob, inst, lang))
+
+    seen: set[str] = set()
+    probe_budgets = {d: 4 for d in IMAGE_GEN_V1_IN_DIST_DOMAINS}
+    calib_budgets = {d: 6 for d in IMAGE_GEN_V1_IN_DIST_DOMAINS}
+    probe_picked = _select_image_gen_split(
+        in_dist,
+        "image-gen-probe-v1-0",
+        probe_budgets,
+        IMAGE_GEN_V1_IN_DIST_DOMAINS,
+        seen,
+        min_dim=128,
+    )
+
+    if split == "probe":
+        selected = probe_picked
+        selection_desc = (
+            "suite image-gen-v1 probe: hash seed image-gen-probe-v1-0; "
+            "16 domains (12 T2I + 4 TI2I, EN+ZH, 5 aspect ratios) x 4 rows (64 total)"
+        )
+    else:
+        calib_picked = _select_image_gen_split(
+            in_dist,
+            "image-gen-calib-v1-1",
+            calib_budgets,
+            IMAGE_GEN_V1_IN_DIST_DOMAINS,
+            seen,
+            min_dim=128,
+        )
+        if split == "calibration":
+            selected = calib_picked
+            selection_desc = (
+                "suite image-gen-v1 calibration: hash seed image-gen-calib-v1-1 (disjoint from probe); "
+                "16 domains (12 T2I + 4 TI2I, EN+ZH, 5 aspect ratios) x 6 rows (96 total)"
+            )
+        else:
+            for idx, row in enumerate(pq.ParquetFile(source_paths["magicbrush_dev0"]).read().to_pylist()):
+                inst = str(row.get("instruction") or "").strip()
+                img_obj = row.get("source_img")
+                blob = img_obj["bytes"] if isinstance(img_obj, dict) else img_obj
+                if inst and isinstance(blob, bytes):
+                    guard_cands.append(("magicbrush_edit", "magicbrush:dev", idx, blob, inst, "en"))
+            for idx, row in enumerate(_read_arrow_stream(source_paths["gedit_shard8"])):
+                tt = str(row.get("task_type") or "").strip()
+                if tt != "tone_transfer":
+                    continue
+                inst = str(row.get("instruction") or "").strip()
+                raw_lang = str(row.get("instruction_language") or "en").strip().lower()
+                lang = "zh" if raw_lang in ("cn", "zh") else "en"
+                img_obj = row.get("input_image_raw") or row.get("input_image")
+                blob = img_obj["bytes"] if isinstance(img_obj, dict) else img_obj
+                if inst and isinstance(blob, bytes):
+                    guard_cands.append(("gedit_tone_transfer", f"gedit:{tt}:{lang}", idx, blob, inst, lang))
+            guard_budgets = {d: 4 for d in IMAGE_GEN_V1_GUARD_DOMAINS}
+            selected = _select_image_gen_split(
+                guard_cands,
+                "image-gen-guard-v1-0",
+                guard_budgets,
+                IMAGE_GEN_V1_GUARD_DOMAINS,
+                seen,
+                min_dim=128,
+            )
+            selection_desc = (
+                "suite image-gen-v1 guard: hash seed image-gen-guard-v1-0 (disjoint from probe and calibration); "
+                "6 OOD domains (4 T2I + 2 TI2I) x 4 rows (24 total)"
+            )
+
+    records = []
+    for item in selected:
+        rec = dict(item)
+        blob = rec.pop("_blob")
+        if blob is not None and rec["image"] is not None:
+            (out / rec["image"]).write_bytes(blob)
+        records.append(rec)
+
+    log_event("SOURCE_SELECTED", suite="image-gen-v1", split=split, rows=len(records))
+    rows_path = out / "rows.jsonl"
+    rows_path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records), encoding="utf-8")
+    manifest = {
+        "suite": "image-gen-v1",
+        "split": split,
+        "sources": provenance,
+        "rows": len(records),
+        "t2i_rows": sum(1 for r in records if r["mode"] == "t2i"),
+        "ti2i_rows": sum(1 for r in records if r["mode"] == "ti2i"),
+        "en_rows": sum(1 for r in records if r["lang"] == "en"),
+        "zh_rows": sum(1 for r in records if r["lang"] == "zh"),
         "rows_sha256": sha256(rows_path),
         "selection": selection_desc,
         "calibration": split == "calibration",
