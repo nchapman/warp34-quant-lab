@@ -1,0 +1,259 @@
+{
+  "engine": {
+    "image": "ghcr.io/nchapman/warp-34:dev",
+    "binary": "/usr/local/bin/w34",
+    "context_length_tokens": 131072,
+    "kv_pages": 8192,
+    "tokens_per_page": 16,
+    "min_headroom_mib": 1024,
+    "default_scratch_arena_mib": 512,
+    "lora_scratch_arena_mib": 1056,
+    "midloop_lora_scratch_arena_mib": 960,
+    "host_embed_gpu_residency_min_slack_mib": 2048,
+    "min_serving_state_slots": 8,
+    "min_active_state_slots": 3
+  },
+  "hardware_tested": {
+    "rtx_3060_12gb": {
+      "name": "NVIDIA GeForce RTX 3060",
+      "compute_capability": "sm_86",
+      "memory_bus_bits": 192,
+      "memory_bandwidth_gb_s": 360.0,
+      "total_vram_mib": 12288,
+      "headless_free_vram_mib": 11946,
+      "simulated_8gb_free_vram_mib": 7788
+    },
+    "rtx_4060_ti_16gb": {
+      "name": "NVIDIA GeForce RTX 4060 Ti",
+      "compute_capability": "sm_89",
+      "memory_bus_bits": 128,
+      "memory_bandwidth_gb_s": 288.0,
+      "total_vram_mib": 16380,
+      "headless_free_vram_mib": 15947
+    }
+  },
+  "model_vram_geometry": {
+    "Qwen3.5-9B": {
+      "trunk_w2_mib": 1916.0,
+      "trunk_w26_30pct_w4_mib": 2453.6,
+      "trunk_w4_mib": 3708.0,
+      "lm_head_w8_mib": 985.2,
+      "embed_bf16_offloaded_mib": 1940.0,
+      "kv_128k_tq4_sm86_mib": 1616.0,
+      "kv_128k_tq4_sm89_mib": 1584.0,
+      "kv_128k_tq4_all_mib": 1056.0,
+      "kv_128k_tq4_vs_tq4_all_delta_mib": 528.0,
+      "gdn_slot_mib": 49.125
+    },
+    "Qwen3.8-27B": {
+      "trunk_w2_mib": 6525.0,
+      "trunk_w22_10pct_w4_mib": 7105.0,
+      "trunk_w26_30pct_w4_mib": 8315.0,
+      "trunk_w4_mib": 12325.0,
+      "lm_head_w8_mib": 1250.4,
+      "embed_bf16_offloaded_mib": 2425.0,
+      "vision_lazy_mib": 236.3,
+      "mtp_opt_in_mib": 240.2,
+      "kv_128k_tq4_sm89_mib": 2640.0,
+      "kv_128k_tq4_all_mib": 2112.0,
+      "kv_128k_tq4_vs_tq4_all_delta_mib": 528.0,
+      "gdn_slot_mib": 146.8125
+    },
+    "Qwen3.6-35B-A3B": {
+      "trunk_w2_mib": 9395.0,
+      "trunk_w26_30pct_w4_mib": 11321.7,
+      "trunk_w4_mib": 17075.0,
+      "lm_head_w8_mib": 500.2,
+      "embed_bf16_offloaded_mib": 970.0,
+      "vision_lazy_mib": 229.1,
+      "mtp_opt_in_mib": 432.7,
+      "kv_128k_tq4_sm89_mib": 924.0,
+      "kv_128k_tq4_all_mib": 660.0,
+      "kv_128k_tq4_vs_tq4_all_delta_mib": 264.0,
+      "gdn_slot_mib": 61.40625
+    }
+  },
+  "throughput_benchmarks_tp1_tq4": [
+    {
+      "gpu": "RTX 3060 12GB",
+      "model": "nchapman/Qwen3.5-9B-W2.6A16-HGPTQ-RCO",
+      "speculative": null,
+      "prompt_len": 512,
+      "gen_len": 128,
+      "prefill_tok_per_s": 1726.7,
+      "decode_tok_per_s": 69.2,
+      "itl_ms": 14.57
+    },
+    {
+      "gpu": "RTX 3060 12GB",
+      "model": "nchapman/Qwen3.5-9B-W2.6A16-HGPTQ-RCO",
+      "speculative": "mtp_k3",
+      "prompt_len": 512,
+      "gen_len": 128,
+      "prefill_tok_per_s": 1671.4,
+      "decode_tok_per_s": 151.5,
+      "mean_tokens_per_round": 3.96875,
+      "itl_ms": 6.60
+    },
+    {
+      "gpu": "RTX 3060 12GB",
+      "model": "nchapman/Qwen3.5-9B-W4A16-HGPTQ",
+      "speculative": null,
+      "prompt_len": 512,
+      "gen_len": 128,
+      "prefill_tok_per_s": 1692.3,
+      "decode_tok_per_s": 60.9,
+      "itl_ms": 16.56
+    },
+    {
+      "gpu": "RTX 3060 12GB",
+      "model": "nchapman/Qwen3.5-9B-W4A16-HGPTQ",
+      "speculative": "mtp_k3",
+      "prompt_len": 512,
+      "gen_len": 128,
+      "prefill_tok_per_s": 1646.7,
+      "decode_tok_per_s": 140.5,
+      "mean_tokens_per_round": 3.96875,
+      "itl_ms": 7.12
+    },
+    {
+      "gpu": "RTX 3060 12GB",
+      "model": "nchapman/Qwen3.8-27B-W2.2A16-HGPTQ-RCO",
+      "speculative": null,
+      "kv_format": "tq4_all",
+      "prompt_len": 512,
+      "gen_len": 64,
+      "prefill_tok_per_s": 505.8,
+      "decode_tok_per_s": 21.95,
+      "itl_ms": 45.57
+    },
+    {
+      "gpu": "RTX 4060 Ti 16GB",
+      "model": "nchapman/Qwen3.5-9B-W4A16-HGPTQ",
+      "speculative": null,
+      "prompt_len": 512,
+      "gen_len": 128,
+      "prefill_tok_per_s": 2862.0,
+      "decode_tok_per_s": 53.6,
+      "itl_ms": 18.67
+    },
+    {
+      "gpu": "RTX 4060 Ti 16GB",
+      "model": "nchapman/Qwen3.5-9B-W4A16-HGPTQ",
+      "speculative": "mtp_k3",
+      "prompt_len": 512,
+      "gen_len": 128,
+      "prefill_tok_per_s": 2854.5,
+      "decode_tok_per_s": 120.1,
+      "mean_tokens_per_round": 3.96875,
+      "itl_ms": 8.32
+    },
+    {
+      "gpu": "RTX 4060 Ti 16GB",
+      "model": "nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO",
+      "speculative": null,
+      "prompt_len": 512,
+      "gen_len": 128,
+      "prefill_tok_per_s": 839.9,
+      "decode_tok_per_s": 24.9,
+      "itl_ms": 40.48
+    },
+    {
+      "gpu": "RTX 4060 Ti 16GB",
+      "model": "nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO",
+      "speculative": "mtp_k3",
+      "prompt_len": 512,
+      "gen_len": 128,
+      "prefill_tok_per_s": 838.8,
+      "decode_tok_per_s": 48.5,
+      "mean_tokens_per_round": 2.88636,
+      "itl_ms": 20.63
+    },
+    {
+      "gpu": "RTX 4060 Ti 16GB",
+      "model": "nchapman/Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO",
+      "speculative": null,
+      "prompt_len": 512,
+      "gen_len": 128,
+      "prefill_tok_per_s": 4165.5,
+      "decode_tok_per_s": 123.2,
+      "itl_ms": 8.18
+    },
+    {
+      "gpu": "RTX 4060 Ti 16GB",
+      "model": "nchapman/Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO",
+      "speculative": "mtp_k3",
+      "prompt_len": 512,
+      "gen_len": 128,
+      "prefill_tok_per_s": 3851.4,
+      "decode_tok_per_s": 190.8,
+      "mean_tokens_per_round": 3.62857,
+      "itl_ms": 5.24
+    }
+  ],
+  "serving_128k_vram_and_safety_buffers": {
+    "8gb_tier_qwen35_9b_w26": {
+      "model": "nchapman/Qwen3.5-9B-W2.6A16-HGPTQ-RCO",
+      "w4_share_pct": 30,
+      "bpw": 2.6,
+      "tq4_128k_used_mib": 6153,
+      "tq4_all_128k_used_mib": 5593,
+      "tq4_all_mtp_k3_128k_used_mib": 6736,
+      "headless_unused_buffer_tq4_mib": 1635,
+      "lora_reserve_mib": 700,
+      "desktop_os_buffer_remaining_tq4_mib": 935,
+      "headless_max_w4_pct_tq4": 80
+    },
+    "12gb_tier_qwen35_9b_w4": {
+      "model": "nchapman/Qwen3.5-9B-W4A16-HGPTQ",
+      "w4_share_pct": 100,
+      "bpw": 4.0,
+      "tq4_128k_used_mib": 9263,
+      "tq4_all_128k_used_mib": 8703,
+      "tq4_mtp_k3_128k_used_mib": 8835,
+      "tq4_all_mtp_k3_128k_used_mib": 8275,
+      "headless_unused_buffer_tq4_mtp_mib": 3111,
+      "lora_reserve_mib": 700,
+      "desktop_os_buffer_remaining_tq4_mtp_mib": 2411
+    },
+    "12gb_tier_qwen38_27b_w22": {
+      "model": "nchapman/Qwen3.8-27B-W2.2A16-HGPTQ-RCO",
+      "w4_share_pct": 10,
+      "bpw": 2.2,
+      "max_context_tokens_tq4_all": 65536,
+      "kv_pages": 4096,
+      "tq4_all_64k_used_mib": 10883,
+      "gdn_slots_at_64k": 4
+    },
+    "16gb_tier_qwen38_27b_w26": {
+      "model": "nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO",
+      "w4_share_pct": 30,
+      "bpw": 2.6,
+      "tq4_128k_used_mib": 14976,
+      "tq4_128k_gdn_slots": 13,
+      "tq4_all_128k_used_mib": 14832,
+      "tq4_all_128k_gdn_slots": 16,
+      "headless_unused_buffer_tq4_mib": 1276,
+      "headless_unused_buffer_tq4_all_mib": 1804,
+      "lora_reserve_mib": 700,
+      "desktop_os_buffer_remaining_tq4_mib": 576,
+      "desktop_os_buffer_remaining_tq4_all_mib": 1104,
+      "headless_max_w4_pct_tq4": 52
+    },
+    "16gb_tier_qwen36_35b_a3b_w26": {
+      "model": "nchapman/Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO",
+      "w4_share_pct": 30,
+      "bpw": 2.62,
+      "tq4_128k_used_mib": 14934,
+      "tq4_128k_gdn_slots": 22,
+      "tq4_all_128k_used_mib": 14918,
+      "tq4_all_128k_gdn_slots": 26,
+      "headless_unused_buffer_tq4_mib": 921,
+      "headless_unused_buffer_tq4_all_mib": 1185,
+      "lora_reserve_mib": 700,
+      "desktop_os_buffer_remaining_tq4_mib": 221,
+      "desktop_os_buffer_remaining_tq4_all_mib": 485,
+      "headless_max_w4_pct_tq4": 42
+    }
+  }
+}
