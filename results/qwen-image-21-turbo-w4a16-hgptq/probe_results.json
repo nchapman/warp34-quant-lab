@@ -1,0 +1,28 @@
+{
+  "model": "qwen-image-2.1-turbo",
+  "base": "/workspace/hf_cache/hub/models--Qwen--Qwen-Image-2.1-Turbo/snapshots/fc13ba1986fcb905854dc8de2f52eee395f49b5b",
+  "quant": "/workspace/out/Qwen-Image-2.1-Turbo-W4A16-HGPTQ",
+  "total_safetensors_bytes": 10541413216,
+  "total_safetensors_gib": 9.817,
+  "probe_cases": 8,
+  "probe_resolution": 512,
+  "num_inference_steps": 8,
+  "text_encoder_prompt_embeds": {
+    "mean_cosine": 0.9513560980558395,
+    "mean_rel_rmse": 0.2540128517098288,
+    "mean_sqnr_db": 13.584991437492118
+  },
+  "teacher_forced_velocity": {
+    "samples": 12,
+    "mean_cosine": 0.9988459398349127,
+    "mean_rel_rmse": 0.04638292192591963,
+    "mean_sqnr_db": 26.99312723707759
+  },
+  "end_to_end_trajectory": {
+    "latent_mean_cosine": 0.9647568687796593,
+    "latent_mean_rel_rmse": 0.20820511670959774,
+    "latent_mean_sqnr_db": 16.498977405200915,
+    "image_mean_psnr_db": 23.14825203938787,
+    "image_min_psnr_db": 14.78764190884906
+  }
+}

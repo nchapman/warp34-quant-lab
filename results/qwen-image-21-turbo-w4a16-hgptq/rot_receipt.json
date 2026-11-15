@@ -1,0 +1,35 @@
+{
+  "model": "qwen-image-2.1-turbo",
+  "base_snapshot": "fc13ba1986fcb905854dc8de2f52eee395f49b5b",
+  "group_size": 64,
+  "hadamard_block_size": 64,
+  "actorder": "static",
+  "dampening_frac": 0.01,
+  "quantize_vision": true,
+  "quantize_lm_head_w8": true,
+  "text_encoder": {
+    "packed_matrices": 369,
+    "text_layers": 36,
+    "vision_matrices": 116,
+    "lm_head_w8": true,
+    "norm_qat": {
+      "enabled": true,
+      "steps": 120,
+      "val_rel_mse_before": 0.0171361668035388,
+      "val_rel_mse_after": 0.012911246158182621,
+      "accepted": true
+    }
+  },
+  "transformer": {
+    "packed_matrices": 224,
+    "dit_qat": {
+      "enabled": true,
+      "steps": 120,
+      "val_rel_mse_before": 0.0009939775700331666,
+      "val_rel_mse_after": 0.0009719062436488457,
+      "accepted": true
+    }
+  },
+  "total_safetensors_bytes": 10541413216,
+  "quant_wall_s": 1084.86
+}

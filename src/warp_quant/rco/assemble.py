@@ -398,7 +398,6 @@ def _assemble_rco_checkpoint_into(
     code_offsets: dict[str, dict[str, float | int]] = {}
     w8_head_tensors: list[str] = []
     did_quantize_lm_head_w8 = False
-    has_mtp_fc_in_base = False
     total_bytes = 0
     packed_count = 0
 
@@ -407,8 +406,6 @@ def _assemble_rco_checkpoint_into(
         out_tensors: dict[str, torch.Tensor] = {}
         with safe_open(str(shard_path), framework="pt", device="cpu") as f:
             for key in f.keys():
-                if key == "mtp.fc.weight":
-                    has_mtp_fc_in_base = True
                 if key == "lm_head.weight" and want_lm_head_w8:
                     raw_lm = f.get_tensor(key)
                     if (
@@ -476,33 +473,49 @@ def _assemble_rco_checkpoint_into(
 
     has_mtp = mtp_packed is not None or quantize_mtp_rtn
     has_vis = vision_packed is not None or quantize_vision_rtn
-    want_mtp_fc_w8 = (
-        has_mtp
-        and has_mtp_fc_in_base
-        and (quantize_lm_head_w8 or bool(mtp_packed and "mtp.fc" in mtp_packed))
-    )
+    donor_hub = None
+    donor_rev = None
+    if model_key is not None:
+        from warp_quant.models import resolve
+
+        _, m_info = resolve(model_key)
+        donor_hub = m_info.get("mtp_donor")
+        donor_rev = m_info.get("mtp_donor_revision")
+    request_mtp_fc_w8 = has_mtp and (quantize_lm_head_w8 or bool(mtp_packed and "mtp.fc" in mtp_packed))
+    did_quantize_mtp_fc_w8 = False
     if has_mtp or has_vis:
         precomputed: dict[str, dict[str, torch.Tensor]] = {}
         if mtp_packed:
             precomputed.update(mtp_packed)
         if vision_packed:
             precomputed.update(vision_packed)
-        _clean_and_augment_shards(
+        aug_counts = _clean_and_augment_shards(
             output_dir,
             quantize_mtp=has_mtp,
             quantize_vision=has_vis,
             group_size=component_group_size,
             hadamard_block_size=int(manifest.get("hadamard_block_size", 64)),
             precomputed_packed=precomputed if precomputed else None,
-            quantize_mtp_fc_w8=want_mtp_fc_w8,
+            quantize_mtp_fc_w8=request_mtp_fc_w8,
+            mtp_donor=donor_hub,
+            mtp_donor_revision=donor_rev,
         )
-        if want_mtp_fc_w8:
+        did_quantize_mtp = aug_counts.get("mtp_quantized", 0) > 0
+        has_mtp = has_mtp and did_quantize_mtp
+        did_quantize_mtp_fc_w8 = aug_counts.get("mtp_fc_w8", 0) > 0
+        if did_quantize_mtp_fc_w8:
             w8_head_tensors.append("mtp.fc")
         out_idx_path = output_dir / "model.safetensors.index.json"
         if out_idx_path.is_file():
             out_idx = json.loads(out_idx_path.read_text())
             total_bytes = int(out_idx.get("metadata", {}).get("total_size", total_bytes))
 
+    if (
+        has_mtp
+        and isinstance(base_cfg.get("text_config"), dict)
+        and int(base_cfg["text_config"].get("mtp_num_hidden_layers") or 0) == 0
+    ):
+        base_cfg["text_config"]["mtp_num_hidden_layers"] = 1
     base_cfg["quantization_config"] = build_rco_quantization_config(
         base_cfg,
         manifest,
@@ -512,7 +525,7 @@ def _assemble_rco_checkpoint_into(
         vision_fc2_channel=vision_fc2_channel,
         component_group_size=component_group_size,
         quantize_lm_head_w8=did_quantize_lm_head_w8,
-        quantize_mtp_fc_w8=want_mtp_fc_w8,
+        quantize_mtp_fc_w8=did_quantize_mtp_fc_w8,
     )
     (output_dir / "config.json").write_text(json.dumps(base_cfg, indent=2, sort_keys=True) + "\n")
 

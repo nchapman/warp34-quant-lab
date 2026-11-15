@@ -587,6 +587,116 @@ def _load_shard_map(model_dir: Path) -> tuple[dict[str, str], dict | None]:
     return {}, None
 
 
+def _resolve_mtp_donor(
+    ckpt_dir: Path,
+    mtp_donor: str | Path | None = None,
+    mtp_donor_revision: str | None = None,
+) -> tuple[str | Path | None, str | None]:
+    if mtp_donor is not None:
+        return mtp_donor, mtp_donor_revision
+    from warp_quant.models import MODELS
+
+    ckpt_str = str(ckpt_dir).lower()
+    for info in MODELS.values():
+        donor = info.get("mtp_donor")
+        if not donor:
+            continue
+        hub_slug = info["hub"].replace("/", "--").lower()
+        rev = info.get("hub_revision")
+        if (rev and ckpt_dir.name == rev) or hub_slug in ckpt_str:
+            return donor, info.get("mtp_donor_revision")
+
+    cfg_path = ckpt_dir / "config.json"
+    if cfg_path.is_file():
+        try:
+            raw_cfg = json.loads(cfg_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None, None
+        if not isinstance(raw_cfg, dict):
+            return None, None
+        tcfg = raw_cfg.get("text_config", raw_cfg)
+        if not isinstance(tcfg, dict):
+            return None, None
+        for info in MODELS.values():
+            donor = info.get("mtp_donor")
+            if (
+                donor
+                and raw_cfg.get("model_type") == info.get("arch")
+                and tcfg.get("num_hidden_layers") == info.get("num_hidden_layers")
+                and tcfg.get("hidden_size") == info.get("hidden_size")
+            ):
+                return donor, info.get("mtp_donor_revision")
+    return None, None
+
+
+def _load_raw_mtp_tensors(
+    ckpt_dir: Path,
+    *,
+    mtp_donor: str | Path | None = None,
+    mtp_donor_revision: str | None = None,
+) -> dict[str, torch.Tensor]:
+    """Load all `mtp.*` tensors from `ckpt_dir`, falling back to `mtp_donor` when stripped."""
+    shard_map, _ = _load_shard_map(ckpt_dir)
+    if shard_map:
+        mtp_shards = sorted({ckpt_dir / s for k, s in shard_map.items() if k.startswith("mtp.")})
+    else:
+        mtp_shards = sorted(ckpt_dir.glob("*.safetensors"))
+
+    raw_mtp: dict[str, torch.Tensor] = {}
+    for sp in mtp_shards:
+        with safe_open(str(sp), framework="pt", device="cpu") as f:
+            for k in f.keys():
+                if k.startswith("mtp."):
+                    raw_mtp[k] = f.get_tensor(k)
+    if raw_mtp:
+        return raw_mtp
+
+    donor, donor_rev = _resolve_mtp_donor(ckpt_dir, mtp_donor, mtp_donor_revision)
+    if donor is None:
+        return raw_mtp
+
+    try:
+        donor_path = Path(donor)
+        if donor_path.is_dir():
+            d_map, _ = _load_shard_map(donor_path)
+            d_shards = (
+                sorted({donor_path / s for k, s in d_map.items() if k.startswith("mtp.")})
+                if d_map
+                else sorted(donor_path.glob("*.safetensors"))
+            )
+        else:
+            from huggingface_hub import hf_hub_download
+
+            idx_file = Path(
+                hf_hub_download(
+                    repo_id=str(donor), filename="model.safetensors.index.json", revision=donor_rev
+                )
+            )
+            idx_data = json.loads(idx_file.read_text())
+            idx_weight_map = idx_data.get("weight_map") if isinstance(idx_data, dict) else None
+            if not isinstance(idx_weight_map, dict):
+                raise ValueError(f"MTP donor {donor!r} model.safetensors.index.json is missing weight_map")
+            shard_filenames = sorted({s for k, s in idx_weight_map.items() if k.startswith("mtp.")})
+            if not shard_filenames:
+                raise ValueError(f"MTP donor {donor!r} index contains no mtp.* tensors")
+            d_shards = [
+                Path(hf_hub_download(repo_id=str(donor), filename=sname, revision=donor_rev))
+                for sname in shard_filenames
+            ]
+
+        for sp in d_shards:
+            with safe_open(str(sp), framework="pt", device="cpu") as f:
+                for k in f.keys():
+                    if k.startswith("mtp."):
+                        raw_mtp[k] = f.get_tensor(k)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load MTP donor tensors from {donor!r}: {exc}") from exc
+
+    if not raw_mtp:
+        raise RuntimeError(f"MTP donor {donor!r} produced zero mtp.* tensors")
+    return raw_mtp
+
+
 def _clean_and_augment_shards(
     save_dir: Path,
     *,
@@ -597,6 +707,8 @@ def _clean_and_augment_shards(
     precomputed_packed: dict[str, dict[str, torch.Tensor]] | None = None,
     quantize_mtp_fc_w8: bool = False,
     quantize_lm_head_w8: bool = False,
+    mtp_donor: str | Path | None = None,
+    mtp_donor_revision: str | None = None,
 ) -> dict[str, int]:
     """Strip extraneous *.v_input.weight keys and optionally quantize MTP / Vision in-place."""
     index_path = save_dir / "model.safetensors.index.json"
@@ -640,11 +752,34 @@ def _clean_and_augment_shards(
     new_weight_map: dict[str, str] = {}
     total_bytes = 0
 
-    for shard_name in shard_names:
+    has_existing_mtp = False
+    if quantize_mtp:
+        if index_data is not None:
+            has_existing_mtp = any(k.startswith("mtp.") for k in index_data.get("weight_map", {}))
+        else:
+            for sname in shard_names:
+                with safe_open(str(save_dir / sname), framework="pt", device="cpu") as f:
+                    if any(k.startswith("mtp.") for k in f.keys()):
+                        has_existing_mtp = True
+                        break
+    donor_mtp_tensors: dict[str, torch.Tensor] = {}
+    if quantize_mtp and not has_existing_mtp and shard_names:
+        donor_mtp_tensors = _load_raw_mtp_tensors(
+            save_dir,
+            mtp_donor=mtp_donor,
+            mtp_donor_revision=mtp_donor_revision,
+        )
+
+    for shard_idx, shard_name in enumerate(shard_names):
         shard_path = save_dir / shard_name
         tensors = load_file(str(shard_path))
         updated: dict[str, torch.Tensor] = {}
         modified = False
+        if donor_mtp_tensors and shard_idx == len(shard_names) - 1:
+            for dk, dv in donor_mtp_tensors.items():
+                if dk not in tensors:
+                    tensors[dk] = dv
+            modified = True
 
         for key, tensor in tensors.items():
             # 1. Strip tied HadamardTransform parameter tensor (*.v_input.weight)
@@ -845,6 +980,22 @@ def _update_config_for_components(
     """Ensure config.json has clean regex targets for Text, MTP, and Vision in both quantization_config and transform_config."""
     cfg_path = save_dir / "config.json"
     cfg = json.loads(cfg_path.read_text())
+    if (
+        quantize_mtp
+        and isinstance(cfg.get("text_config"), dict)
+        and int(cfg["text_config"].get("mtp_num_hidden_layers") or 0) == 0
+    ):
+        s_map, _ = _load_shard_map(save_dir)
+        if s_map:
+            has_mtp_weights = any(k.startswith("mtp.") for k in s_map)
+        else:
+            shards = sorted(save_dir.glob("*.safetensors"))
+            has_mtp_weights = not shards or any(
+                any(k.startswith("mtp.") for k in safe_open(str(sp), framework="pt", device="cpu").keys())
+                for sp in shards
+            )
+        if has_mtp_weights:
+            cfg["text_config"]["mtp_num_hidden_layers"] = 1
     qcfg = cfg["quantization_config"]
 
     text_targets = [TEXT_TARGET_RE]
@@ -996,6 +1147,11 @@ def run_quantize(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir).resolve()
     if output_dir.exists() or output_dir.is_symlink():
         raise ValueError(f"--output-dir already exists: {output_dir}")
+
+    if info.get("arch") == "qwen_image_21" or (Path(hub_id) / "model_index.json").is_file():
+        from warp_quant.qwen_image import run_quantize_qwen_image
+
+        return run_quantize_qwen_image(args)
 
     if not Path(hub_id).exists():
         hub_id = resolve_snapshot(hub_id, revision=info.get("hub_revision"))
@@ -1273,13 +1429,15 @@ def run_quantize(args: argparse.Namespace) -> None:
         precomputed_packed=precomputed_packed,
         quantize_mtp_fc_w8=want_head_w8,
         quantize_lm_head_w8=want_lm_head_w8,
+        mtp_donor=info.get("mtp_donor"),
+        mtp_donor_revision=info.get("mtp_donor_revision"),
     )
     _update_config_for_components(
         output_dir,
         group_size=args.group_size,
         actorder=actorder,
         hadamard_block_size=args.hadamard_block_size,
-        quantize_mtp=args.quantize_mtp,
+        quantize_mtp=args.quantize_mtp and shard_counts["mtp_quantized"] > 0,
         quantize_vision=args.quantize_vision,
         vision_fc2_channel=shard_counts["vision_fc2_channel"] > 0,
         quantize_lm_head_w8=shard_counts["lm_head_w8"] > 0,
@@ -1712,19 +1870,8 @@ def _load_mtp_module_from_checkpoint(
     is_moe_mtp = getattr(base_config.text_config, "num_experts", 0) > 0
     mtp = _build_mtp_module(base_config.text_config).to(device=device, dtype=torch.bfloat16).eval()
 
-    # Collect all mtp.* tensors from checkpoint shards
-    shard_map, _ = _load_shard_map(ckpt_dir)
-    if shard_map:
-        mtp_shards = sorted({ckpt_dir / s for k, s in shard_map.items() if k.startswith("mtp.")})
-    else:
-        mtp_shards = sorted(ckpt_dir.glob("*.safetensors"))
-
-    raw_mtp: dict[str, torch.Tensor] = {}
-    for sp in mtp_shards:
-        with safe_open(str(sp), framework="pt", device="cpu") as f:
-            for k in f.keys():
-                if k.startswith("mtp."):
-                    raw_mtp[k] = f.get_tensor(k)
+    # Collect all mtp.* tensors from checkpoint shards (or configured mtp_donor when stripped)
+    raw_mtp = _load_raw_mtp_tensors(ckpt_dir)
 
     # Decompress any packed MTP linear weights
     state_dict: dict[str, torch.Tensor] = {}
@@ -2096,6 +2243,11 @@ def run_probe(args: argparse.Namespace) -> None:
             sub_args.quant = str(qd)
             run_probe_decision(sub_args)
         return
+
+    if info.get("arch") == "qwen_image_21" or (base_dir / "model_index.json").is_file():
+        from warp_quant.qwen_image import run_probe_qwen_image
+
+        return run_probe_qwen_image(args)
 
     cls_name = model_class(str(base_dir)).__name__
     if cls_name.startswith("Qwen4Exp") or cls_name == "Qwen3_5MoeForConditionalGeneration":

@@ -14,6 +14,9 @@ This project takes a different approach: **every part of the model is calibrated
   - **Companion `DFlash2` block-diffusion drafters:** For `27B` and `Flash-Next`, we also ship 4-bit `DFlash2` drafters that propose **16 tokens in a single parallel pass** (`3.76×` less memory bandwidth per draft step) while keeping **99.7%–99.8%** of 16-bit acceptance length.
 - **Rotation before quantization (`Hadamard + GPTQ`):**
   - Standard 4-bit quantizers struggle when a few weight or activation channels have huge outlier spikes. Before quantizing to 4-bit, we apply a fast mathematical rotation (a block Walsh–Hadamard transform) that spreads outliers evenly across 64-weight groups, then run Cholesky GPTQ to compensate for rounding error. That cuts overall divergence from 16-bit by **~30%** (and worst-case tail spikes by **up to 64%**) compared to standard 4-bit GPTQ.
+- **Salvaged & trajectory-calibrated speculative + diffusion quantization:**
+  - **Salvaged Native MTP:** `NousResearch/Arete-27B` shipped without `mtp.*` weights. Because its embedding matrix is bit-identical to `Qwen/Qwen3.8-27B`, we graft the donor MTP head, calibrate it on Arete Layer-63 hidden states, and restore speculative decoding with **96.47% isolated / 88.69% E2E Top-1 agreement**.
+  - **Full diffusion pipelines at 4-bit:** `Qwen/Qwen-Image-2.1` and `Qwen-Image-2.1-Turbo` (8.77B `Qwen3VL` text encoder + 7.12B single-stream DiT + VAE, `32.45 GiB → 9.82 GiB`, `3.31×`) are quantized with trajectory-calibrated block-by-block DiT HGPTQ + Layer-35 unnormalized-hidden-state Norm QAT, retaining **`0.9988` teacher-forced velocity cosine** and **`23.1 dB` end-to-end decoded-image PSNR** vs. the BF16 pipeline.
 - **Giant MoE & N-Gram models that actually fit on real hardware:**
   - On `Qwen3.6-35B-A3B` (`67.0 GiB → 18.78 GiB` in `W4A16-HGPTQ` for 24 GB cards, or **`13.15 GiB` in `W2.6A16-HGPTQ-RCO` for a single 16 GB GPU**) and the 180B-class `Qwen3.8-Flash-Next` (`335.3 GiB → 92.84 GiB` in `W4A16-HGPTQ`, or **`44.93 GiB` trunk / `71.75 GiB` total in `W2.6A16-HGPTQ-RCO` for a 48 GB or 80 GB GPU**), we rotate and quantize all routed *and* shared MoE experts, compress `Flash-Next`’s massive `102.4 GB` N-gram lookup table down to `26.8 GiB` using a custom 4-bit lookup table tailored to its downstream projections, and bundle **pre-computed hot-expert rankings** (`static_hot_cache_rankings.json`) so inference engines know which experts to pin in GPU VRAM from the very first token.
 
@@ -21,7 +24,7 @@ This project takes a different approach: **every part of the model is calibrated
 
 ## Published Models & Measured Fidelity
 
-All 17 checkpoints (`10` `W4A16-HGPTQ`, `5` sub-3-bit `HGPTQ-RCO`, and `2` `DFlash2` drafters) are published on Hugging Face under [`nchapman`](https://huggingface.co/nchapman), with full evaluation receipts and model cards in [`results/`](results/):
+All 22 checkpoints (`13` `W4A16-HGPTQ`, `7` sub-3-bit `HGPTQ-RCO`, and `2` `DFlash2` drafters) are published on Hugging Face under [`nchapman`](https://huggingface.co/nchapman), with full evaluation receipts and model cards in [`results/`](results/):
 
 | Model | Artifact (`nchapman/*`) | Size | `probe-v4` PPL (BF16 → Quant) | `probe-v4` `weighted_kl` | `probe-guard` `weighted_kl` (`mean_kl`) | MTP Iso `mean_kl` (Top-1) | Vision Iso `mean_kl` (Top-1) | Vision Guard Iso Top-1 |
 |---|---|---:|---|---:|---|---:|---:|---:|
@@ -32,6 +35,7 @@ All 17 checkpoints (`10` `W4A16-HGPTQ`, `5` sub-3-bit `HGPTQ-RCO`, and `2` `DFla
 | `ornith-ai/Ornith-1.5-9B` | [`Ornith-1.5-9B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Ornith-1.5-9B-W4A16-HGPTQ) ([card](results/dense-w4a16-hgptq/9b-ornith-g64-h64/README.md)) | `6.67 GiB` | `6.6829 → 5.6579` (`-15.338%`) | `0.144025` | `0.133591` (`0.096463`) | `0.012652` (`94.68%`) | `0.020540` (`97.02%`) | `97.04%` |
 | `Qwen/Qwen3.8-27B` | [`Qwen3.8-27B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-27B-W4A16-HGPTQ) ([card](results/dense-w4a16-hgptq/27b-g64-h64/README.md)) | `16.14 GiB` | `8.5332 → 8.1841` (`-4.091%`) | `0.100223` | `0.073907` (`0.052982`) | `0.008979` (`96.64%`) | `0.005603` (`97.68%`) | `99.26%` |
 | `ukisai/Swift-1.5-Qwen3.8-27b` | [`Swift-1.5-Qwen3.8-27b-W4A16-HGPTQ`](https://huggingface.co/nchapman/Swift-1.5-Qwen3.8-27b-W4A16-HGPTQ) ([card](results/dense-w4a16-hgptq/27b-swift-g64-h64/README.md)) | `16.14 GiB` | `9.6265 → 9.0881` (`-5.593%`) | `0.107444` | `0.071995` (`0.055502`) | `0.009043` (`96.43%`) | `0.007063` (`98.01%`) | `99.26%` |
+| `NousResearch/Arete-27B` | [`Arete-27B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Arete-27B-W4A16-HGPTQ) ([card](results/arete-27b-w4a16-hgptq/README.md)) | `16.14 GiB` | `4.9736 → 4.8222` (`-3.044%`) | `0.088445` | `0.091283` (`0.067951`) | `0.008862` (`96.47%`, salvaged) | `0.004956` (`98.34%`) | `97.78%` |
 | `Qwen/Qwen3.6-35B-A3B` | [`Qwen3.6-35B-A3B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.6-35B-A3B-W4A16-HGPTQ) ([card](results/qwen36-35b-a3b-w4a16-hgptq/README.md)) | `18.78 GiB` | `4.0208 → 3.7522` (`-6.682%`) | `0.084694` | `0.050908` (`0.046230`) | `0.010490` (`95.80%`) | `0.007135` (`99.34%`) | `98.52%` |
 | `ornith-ai/Ornith-1.5-35B-A3B` | [`Ornith-1.5-35B-A3B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Ornith-1.5-35B-A3B-W4A16-HGPTQ) ([card](results/ornith-15-35b-a3b-w4a16-hgptq/README.md)) | `18.78 GiB` | `10.8033 → 10.2627` (`-5.004%`) | `0.113922` | `0.228886` (`0.164721`) | `0.021504` (`91.44%`) | `0.030482` (`96.36%`) | `97.04%` |
 | `Qwen/Qwen3.8-Flash-Next` | [`Qwen3.8-Flash-Next-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-W4A16-HGPTQ) ([card](results/qwen38-flash-next-w4a16-hgptq/README.md)) | `92.84 GiB` | `3.6085 → 3.5683` (`-1.114%`) | `0.042091` | `0.088441` (`0.067320`) | `0.018417` (`95.41%`) | `0.017124` (`97.35%`) | `99.26%` |
@@ -44,6 +48,8 @@ All 17 checkpoints (`10` `W4A16-HGPTQ`, `5` sub-3-bit `HGPTQ-RCO`, and `2` `DFla
 | `Qwen/Qwen3.8-27B` | [`Qwen3.8-27B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO) ([card](results/rco-27b-w2w4/README-W2.6A16-HGPTQ-RCO.md), [sweep](results/rco-27b-w2w4/README.md)) | `2.60` (`30%` `W4`) | `12.18 GiB` (`11.71 GiB`) | `16 GB` (full VLM + MTP) | `0.2717` (`0.4265`) | `0.3272` | `96.64%` / `74.47%` | `97.68%` / `88.74%` |
 | `Qwen/Qwen3.8-27B` | [`Qwen3.8-27B-W2.2A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-27B-W2.2A16-HGPTQ-RCO) ([card](results/rco-27b-w2w4/README-W2.2A16-HGPTQ-RCO.md), [sweep](results/rco-27b-w2w4/README.md)) | `2.20` (`10%` `W4`) | `11.04 GiB` (`10.58 GiB`) | Headless `12 GB` / `16 GB` long-ctx | `0.3137` (`0.4597`) | `0.3835` | `96.64%` / `72.10%` | `97.68%` / `86.09%` |
 | `Qwen/Qwen3.6-35B-A3B` | [`Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO) ([card](results/rco-35b-w2w4/README-W2.6A16-HGPTQ-RCO.md), [sweep](results/rco-35b-w2w4/README.md)) | `2.62` (`25%` `W4` exp) | `13.15 GiB` (`12.24 GiB`) | `16 GB` (full MoE VLM + MTP) | `0.2121` (`0.3885`) | `0.1943` | `95.80%` / `83.47%` | `99.34%` / `91.72%` |
+| `ornith-ai/Ornith-1.5-9B` | [`Ornith-1.5-9B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Ornith-1.5-9B-W2.6A16-HGPTQ-RCO) ([card](results/ornith-15-9b-w26a16-hgptq-rco/README.md)) | `2.60` (`30%` `W4`) | `5.54 GiB` | `8 GB` (full VLM + MTP) | `0.3550` (`0.5041`) | `0.4739` | `94.68%` / `68.57%` | `98.68%` / `88.41%` |
+| `ornith-ai/Ornith-1.5-35B-A3B` | [`Ornith-1.5-35B-A3B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Ornith-1.5-35B-A3B-W2.6A16-HGPTQ-RCO) ([card](results/ornith-15-35b-a3b-w26a16-hgptq-rco/README.md)) | `2.62` (`25%` `W4` exp) | `13.15 GiB` | `16 GB` (full MoE VLM + MTP) | `0.2682` (`0.4338`) | `0.4744` | `91.44%` / `63.88%` | `95.36%` / `92.38%` |
 | `Qwen/Qwen3.8-Flash-Next` | [`Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO) ([card](results/qwen38-flash-next-w26a16-hgptq-rco/README.md)) | `2.57` (`25%` `W4` exp) | `71.75 GiB` (`44.93 GiB` trunk) | `48 GB` (`mmap` PLE) / `80 GB` (all-in) | `0.1396` (`0.1695`) | `0.3150` | `95.41%` / `81.55%` | `97.02%` / `90.73%` |
 
 ### Companion DFlash2 Block-Diffusion Speculative Drafters (`W4A16-HGPTQ`)
@@ -52,6 +58,15 @@ All 17 checkpoints (`10` `W4A16-HGPTQ`, `5` sub-3-bit `HGPTQ-RCO`, and `2` `DFla
 |---|---|---|---|---|---|---|---|
 | `incoai/Qwen3.8-27B-DFlash2` | [`Qwen3.8-27B-DFlash2-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-27B-DFlash2-W4A16-HGPTQ) ([card](results/dense-w4a16-hgptq/dflash2-27b-README.md)) | `3.58 GiB → 1.31 GiB` (`2.74×`) | `3,175 MiB → 843 MiB` (`3.76×`) | `2.540 → 2.535` (`99.8%`) | `53.88% → 53.88%` (`100.0%`) | `0.023087` | `92.63% / 92.03%` |
 | `incoai/Qwen3.8-Flash-Next-DFlash2` | [`Qwen3.8-Flash-Next-DFlash2-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-DFlash2-W4A16-HGPTQ) ([card](results/dense-w4a16-hgptq/dflash2-flash-next-README.md)) | `1.12 GiB → 0.52 GiB` (`2.17×`) | `843.8 MiB → 224.1 MiB` (`3.76×`) | `2.760 → 2.752` (`99.7%`) | `59.67% → 59.60%` (`99.9%`) | `0.027571` | `92.23% / 91.47%` |
+
+### Diffusion Image-Generation Checkpoints (`W4A16-HGPTQ`)
+
+Full-pipeline 4-bit quantizations of the `16B` Qwen-Image-2.1 text-to-image / image-to-image models (`8.77B` `Qwen3VL` text encoder + `7.12B` single-stream 3D-RoPE DiT + `0.63 GiB` BF16 VAE; `32.45 GiB → 9.82 GiB`, `3.31×`). The DiT is calibrated on real FlowMatch denoising trajectories captured at the entry to `transformer_blocks[0]`; the text encoder targets the unnormalized Layer-35 hidden states the pipeline actually consumes. Fidelity is measured both teacher-forced (per-step velocity vs. the BF16 DiT) and end-to-end (full multi-step trajectory with identical seeds, decoded to RGB PSNR):
+
+| Base Model | Artifact (`nchapman/*`) | Size | Text-Encoder Prompt-Embeds Cosine (SQNR) | Teacher-Forced Velocity Cosine (SQNR) | E2E Latent Cosine (SQNR) | Decoded Image PSNR |
+|---|---|---:|---:|---:|---:|---:|
+| `Qwen/Qwen-Image-2.1-Turbo` | [`Qwen-Image-2.1-Turbo-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen-Image-2.1-Turbo-W4A16-HGPTQ) ([card](results/qwen-image-21-turbo-w4a16-hgptq/README.md)) | `9.82 GiB` | `0.9514` (`13.58 dB`) | `0.9988` (`26.99 dB`) | `0.9648` (`16.50 dB`) | `23.15 dB` |
+| `Qwen/Qwen-Image-2.1` | [`Qwen-Image-2.1-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen-Image-2.1-W4A16-HGPTQ) ([card](results/qwen-image-21-w4a16-hgptq/README.md)) | `9.82 GiB` | `0.9512` (`13.52 dB`) | `0.9986` (`26.61 dB`) | `0.9799` (`15.44 dB`) | `23.09 dB` |
 
 ---
 
@@ -99,6 +114,14 @@ mise run quantize -- \
 mise run quantize -- \
   --model flash-next \
   --output-dir ./out/Qwen3.8-Flash-Next-W4A16-HGPTQ
+
+# Quantize Qwen-Image-2.1-Turbo (8.77B Qwen3VL text encoder + 7.12B DiT, trajectory-calibrated HGPTQ + Norm QAT)
+mise run quantize -- \
+  --model qwen-image-2.1-turbo \
+  --output-dir ./out/Qwen-Image-2.1-Turbo-W4A16-HGPTQ \
+  --quantize-vision \
+  --quantize-lm-head-w8 \
+  --vision-calib-dir data/vision-calib-v2
 
 # Single-pass teacher-forced fidelity probe across probe-v4, probe-guard, MTP, and Vision v2
 mise run probe -- \

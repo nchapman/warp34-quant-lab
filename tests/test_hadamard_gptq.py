@@ -507,6 +507,85 @@ def test_gguf_model_class_and_probe_guards():
             assert "base_dir" in str(exc)
 
 
+def test_mtp_donor_grafts_stripped_mtp_tensors():
+    from warp_quant.models import resolve
+
+    hub_id, info = resolve("27b-arete")
+    assert hub_id == "NousResearch/Arete-27B"
+    assert info["mtp_donor"] == "Qwen/Qwen3.8-27B"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        donor_dir = root / "donor"
+        save_dir = root / "save"
+        donor_dir.mkdir()
+        save_dir.mkdir()
+
+        save_file(
+            {
+                "mtp.fc.weight": torch.randn(64, 128, dtype=torch.bfloat16),
+                "mtp.norm.weight": torch.ones(64, dtype=torch.bfloat16),
+                "mtp.layers.0.self_attn.q_proj.weight": torch.randn(64, 64, dtype=torch.bfloat16),
+            },
+            str(donor_dir / "model.safetensors"),
+        )
+        save_file(
+            {
+                "model.language_model.layers.0.self_attn.q_proj.weight": torch.randn(
+                    64, 64, dtype=torch.bfloat16
+                ),
+            },
+            str(save_dir / "model-00001-of-00001.safetensors"),
+        )
+        (save_dir / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {
+                    "metadata": {"total_size": 8192},
+                    "weight_map": {
+                        "model.language_model.layers.0.self_attn.q_proj.weight": "model-00001-of-00001.safetensors"
+                    },
+                }
+            )
+        )
+        (save_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "qwen3_5",
+                    "text_config": {"mtp_num_hidden_layers": 0, "num_hidden_layers": 64, "hidden_size": 5120},
+                    "quantization_config": {"config_groups": {}, "ignore": [], "format": "pack-quantized"},
+                }
+            )
+        )
+
+        counts = _clean_and_augment_shards(
+            save_dir,
+            quantize_mtp=True,
+            quantize_vision=False,
+            group_size=32,
+            hadamard_block_size=64,
+            quantize_mtp_fc_w8=True,
+            mtp_donor=donor_dir,
+        )
+        assert counts["mtp_quantized"] == 2
+        assert counts["mtp_fc_w8"] == 1
+        _update_config_for_components(
+            save_dir,
+            group_size=32,
+            actorder="static",
+            hadamard_block_size=64,
+            quantize_mtp=True,
+            quantize_vision=False,
+            vision_fc2_channel=False,
+            quantize_mtp_fc_w8=True,
+        )
+        cfg = json.loads((save_dir / "config.json").read_text())
+        assert cfg["text_config"]["mtp_num_hidden_layers"] == 1
+        out_tensors = load_file(str(save_dir / "model-00001-of-00001.safetensors"))
+        assert "mtp.fc.weight_packed" in out_tensors
+        assert "mtp.layers.0.self_attn.q_proj.weight_packed" in out_tensors
+        assert "mtp.norm.weight" in out_tensors
+
+
 class RotExperimentTests(unittest.TestCase):
     def test_target_regexes(self):
         test_target_regexes_match_hf_and_vllm_names()
@@ -531,6 +610,9 @@ class RotExperimentTests(unittest.TestCase):
 
     def test_gguf_probe_guards(self):
         test_gguf_model_class_and_probe_guards()
+
+    def test_mtp_donor_graft(self):
+        test_mtp_donor_grafts_stripped_mtp_tensors()
 
 
 if __name__ == "__main__":
