@@ -5,7 +5,7 @@ Supports:
 - Non-causal full attention (`attention_mode: "noncausal_full_attention"` or `"prefix_bidir"`).
 - Recurrent middle-block damped-Euler depth (`midloop`: `blocks` + `passes: 2` on `GLiDE-9B` / `GLiDE-27B`).
 - Prefix normalization (`language_model.*` -> `model.language_model.*`, `visual.*` -> `model.visual.*`)
-  so quantized checkpoints load identically in `warp-34`, `transformers` (`Qwen3_5Model` /
+  so quantized checkpoints load identically in `warp34`, `transformers` (`Qwen3_5Model` /
   `Qwen3_5ForConditionalGeneration`), `glide`, and `d3_runtime`.
 """
 
@@ -858,7 +858,7 @@ def run_quantize_decision(args: argparse.Namespace) -> None:
     # Normalize config.json + stamp compressed-tensors quantization_config & transform_config
     out_cfg = dict(raw_cfg)
     if "text_config" not in out_cfg:
-        # GLiDE-9B flat config -> keep top-level fields for glide/model.py AND add text_config for Qwen3_5Config/warp-34
+        # GLiDE-9B flat config -> keep top-level fields for glide/model.py AND add text_config for Qwen3_5Config/warp34
         t_fields = {k: v for k, v in raw_cfg.items() if k not in ("architectures", "quantization_config")}
         out_cfg["text_config"] = t_fields
     if not has_vision:
@@ -1508,7 +1508,7 @@ tags:
 - **Footprint:** `{quant_gib:.2f} GiB` total across `{text_q}` quantized text linears{vis_summary}, plus the exact BF16 `readout.safetensors` (`{readout_shape[0]} × {readout_shape[1]}` code-readout head).
 - **Quantization recipe:** 64×64 Sylvester Walsh–Hadamard input rotation (`H_64`) + MSE-initialized Cholesky GPTQ (`group_size=64`, `actorder="static"`, `dampening_frac=0.01`), calibrated layer-by-layer under `{attn_mode}` attention.
 - **Architecture & recurrence:** `{num_layers}` layers (`hidden_size={hidden_size}`). {midloop_note}.
-- **Canonical weight layout:** All safetensors keys use canonical `model.language_model.*` (and `model.visual.*`) prefixes with `"quantization_status": "compressed"`, loading cleanly with `missing: 0, unexpected: 0` in `Qwen3_5Model.from_pretrained`, `{"Glide.from_pretrained" if is_glide else "D3.from_pretrained"}`, and `warp-34`.
+- **Canonical weight layout:** All safetensors keys use canonical `model.language_model.*` (and `model.visual.*`) prefixes with `"quantization_status": "compressed"`, loading cleanly with `missing: 0, unexpected: 0` in `Qwen3_5Model.from_pretrained`, `{"Glide.from_pretrained" if is_glide else "D3.from_pretrained"}`, and `warp34`.
 
 ## Quality vs. BF16 Base Model (`{hub_id}`)
 

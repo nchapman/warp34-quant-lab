@@ -78,14 +78,14 @@ Both `runtime/static_hot_cache_rankings.json` and root `static_hot_cache_ranking
 | Layer `47` | `W4_g64` | `510 / 512` | `[242, 398, 157, 110, 127]` | `31.81%` | `46.18%` | `54.51%` | `66.00%` | `88.52%` |
 | `mtp.0` | `W4_g64` | `512 / 512` | `[439, 433, 410, 257, 451]` | `26.68%` | `39.88%` | `47.57%` | `58.41%` | `81.31%` |
 
-## Measured `w34` `128K`-Context (`--kv-pages 8192`) Throughput & VRAM on `1×` and `2× RTX 3090 (24 GB)`
+## Measured `warp34` `128K`-Context (`--kv-pages 8192`) Throughput & VRAM on `1×` and `2× RTX 3090 (24 GB)`
 
 Across all 48 layers (`12` `W4_g64` layers at `1.992 MiB/expert` + `36` `W2_g64` layers at `1.055 MiB/expert`), each `+1` hot expert slot per rank costs **`61.875 MiB`** (`-35.3%` vs. `95.625 MiB/slot` on pure `W4A16`), while the `26.82 GiB` 4-bit PLE table is `mmap`'d in system RAM and 100% of the Native MTP layer's local experts (`256 / 256` per rank on `TP=2`) reside in GPU VRAM:
 
 | Hardware (`TP`, Per-Rank `k_hot`) | VRAM Experts (`Total / 512`) | `128K` `tq4` + `MTP` VRAM / GPU (`Free`) | Prefill (`512` tok) | Decode (`no MTP`) | Decode (`--speculative mtp --mtp-k 3`) | Mean Tokens / Round (`ITL`) |
 |---|---|---:|---:|---:|---:|---:|
 | **`1× RTX 3090 24 GB`** (`TP=1`, `k_hot=96/512`) | `96 / 512` (`18.75%`) | `19,489 MiB` (`4,638 MiB` free, `20` GDN slots) | `278.8 tok/s` | **`26.10 tok/s`** | `24.04 tok/s` | `3.94` (`38.31 ms` std) |
-| **`2× RTX 3090 24 GB`** (`TP=2`, default `k_hot=128/256`) | `256 / 512` (`50.00%`) | `18,112 MiB` (`6,000 MiB` free, `18` GDN slots) | `403.5 tok/s` | `50.32 tok/s` | **`73.23 tok/s`** | `3.94` (`13.65 ms`) |
-| **`2× RTX 3090 24 GB`** (`TP=2`, `k_hot=160/256` LoRA+Desktop) | `320 / 512` (`62.50%`) | `21,256 MiB` (`2,856 MiB` free, `18` GDN slots) | `502.3 tok/s` | `59.69 tok/s` | **`94.92 tok/s`** | `3.94` (`10.54 ms`) |
+| **`2× RTX 3090 24 GB`** (`TP=2`, `k_hot=128/256`) | `256 / 512` (`50.00%`) | `18,112 MiB` (`6,000 MiB` free, `18` GDN slots) | `403.5 tok/s` | `50.32 tok/s` | **`73.23 tok/s`** | `3.94` (`13.65 ms`) |
+| **`2× RTX 3090 24 GB`** (`TP=2`, default `k_hot=160/256` LoRA+Desktop) | `320 / 512` (`62.50%`) | `21,256 MiB` (`2,856 MiB` free, `18` GDN slots) | `502.3 tok/s` | `59.69 tok/s` | **`94.97 tok/s`** | `3.94` (`10.53 ms`) |
 | **`2× RTX 3090 24 GB`** (`TP=2`, `k_hot=192/256` `75%` VRAM) | `384 / 512` (`75.00%`) | `23,728 MiB` (`384 MiB` free, `18` GDN slots) | `707.6 tok/s` | `71.37 tok/s` | **`124.17 tok/s`** | `3.94` (`8.05 ms`) |
 | **`2× RTX 3090 24 GB`** (`TP=2`, `k_hot=208/256` `81.25%` VRAM) | `416 / 512` (`81.25%`) | `23,728 MiB` (`384 MiB` free, `18` GDN slots) | **`787.5 tok/s`** | **`74.02 tok/s`** | **`131.55 tok/s`** | `3.94` (**`7.60 ms`**) |

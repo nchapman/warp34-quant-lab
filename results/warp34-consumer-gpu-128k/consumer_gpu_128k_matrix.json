@@ -1,7 +1,7 @@
 {
   "engine": {
-    "image": "ghcr.io/nchapman/warp-34:dev",
-    "binary": "/usr/local/bin/w34",
+    "image": "ghcr.io/nchapman/warp34:dev",
+    "binary": "/usr/local/bin/warp34",
     "context_length_tokens": 131072,
     "kv_pages": 8192,
     "tokens_per_page": 16,

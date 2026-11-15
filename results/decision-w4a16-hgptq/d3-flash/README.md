@@ -20,7 +20,7 @@ tags:
 - **Footprint:** `5.56 GiB` total across `200` quantized text linears, plus `137` vision tower & merger linears, plus the exact BF16 `readout.safetensors` (`255 × 4096` code-readout head).
 - **Quantization recipe:** 64×64 Sylvester Walsh–Hadamard input rotation (`H_64`) + MSE-initialized Cholesky GPTQ (`group_size=64`, `actorder="static"`, `dampening_frac=0.01`), calibrated layer-by-layer under `noncausal_full_attention` attention.
 - **Architecture & recurrence:** `32` layers (`hidden_size=4096`). Single-pass hybrid GatedDeltaNet + full-attention forward pass.
-- **Canonical weight layout:** All safetensors keys use canonical `model.language_model.*` (and `model.visual.*`) prefixes with `"quantization_status": "compressed"`, loading cleanly with `missing: 0, unexpected: 0` in `Qwen3_5Model.from_pretrained`, `D3.from_pretrained`, and `warp-34`.
+- **Canonical weight layout:** All safetensors keys use canonical `model.language_model.*` (and `model.visual.*`) prefixes with `"quantization_status": "compressed"`, loading cleanly with `missing: 0, unexpected: 0` in `Qwen3_5Model.from_pretrained`, `D3.from_pretrained`, and `warp34`.
 
 ## Quality vs. BF16 Base Model (`vllm-sr/d3-flash`)
 

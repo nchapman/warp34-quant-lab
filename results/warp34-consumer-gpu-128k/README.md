@@ -1,6 +1,6 @@
-# Consumer GPU `128K`-Context (`--kv-pages 8192`) Fit, Throughput & Safety Buffer Guide (`warp-34`)
+# Consumer GPU `128K`-Context (`--kv-pages 8192`) Fit, Throughput & Safety Buffer Guide (`warp34`)
 
-Empirical `w34` (`ghcr.io/nchapman/warp-34:dev`) capacity planning, throughput benchmarks, and VRAM safety buffer analysis for **`8 GB`**, **`12 GB` (`RTX 3060`)**, **`16 GB` (`RTX 4060 Ti`)**, and **`1× / 2× 24 GB` (`RTX 3090`, `TP=1` & `TP=2`)** consumer GPUs at **`128K` context (`131,072` tokens = `--kv-pages 8192`)** with TurboQuant 4-bit KV cache (`--kv-format tq4` and `tq4_all`), Native `MTP` speculative decoding (`--speculative mtp --mtp-k 3`), Multi-LoRA adapters (`--lora`), and Desktop OS environments (Windows 11 DWM / WSL2 and Linux Wayland / X11).
+Empirical `warp34` (`ghcr.io/nchapman/warp34:dev`) capacity planning, throughput benchmarks, and VRAM safety buffer analysis for **`8 GB`**, **`12 GB` (`RTX 3060`)**, **`16 GB` (`RTX 4060 Ti`)**, and **`1× / 2× 24 GB` (`RTX 3090`, `TP=1` & `TP=2`)** consumer GPUs at **`128K` context (`131,072` tokens = `--kv-pages 8192`)** with TurboQuant 4-bit KV cache (`--kv-format tq4` and `tq4_all`), Native `MTP` speculative decoding (`--speculative mtp --mtp-k 3`), Multi-LoRA adapters (`--lora`), and Desktop OS environments (Windows 11 DWM / WSL2 and Linux Wayland / X11).
 
 Machine-readable receipts: [`consumer_gpu_128k_matrix.json`](consumer_gpu_128k_matrix.json).
 
@@ -10,19 +10,19 @@ Machine-readable receipts: [`consumer_gpu_128k_matrix.json`](consumer_gpu_128k_m
 
 Across `Qwen3.5-9B`, `Qwen3.8-27B`, and `Qwen3.6-35B-A3B`, the `30% W4` (`~2.60 bpw`) Riemannian `HGPTQ-RCO` tier sits at **two simultaneous optima**:
 1. **Quality Pareto Elbow:** Allocating the top `25%–30%` highest-sensitivity linear groups (all Full-Attention `qkv`/`o_proj`, boundary/late GDN projections, and top-sensitivity FFN/routed-expert blocks) to `W4_g64` while keeping the remaining `70%–75%` in `W2_g64` + E2E Scale/Norm/GDN KL QAT captures the steep elbow of the KL/PPL Pareto curve.
-2. **Full-Stack Consumer VRAM Envelope (`128K` `tq4` + `LoRA` + Desktop OS + `w34` Headroom):**
+2. **Full-Stack Consumer VRAM Envelope (`128K` `tq4` + `LoRA` + Desktop OS + `warp34` Headroom):**
    When you account for all four real-world consumer VRAM consumers—
    - **Default `128K` `tq4` KV cache** (`--kv-pages 8192`, keeping the final 4 full-attention retrieval layers in unrotated 8-bit `FP8 E4M3` / `Q8_0` and preceding layers in WHT-256 `TQ4`),
-   - **Attached LoRA adapters (`~660–750 MiB`)** (`lora_arena` + `w34`'s automatic `512 MiB → 1,056 MiB` `scratch_arena` expansion),
+   - **Attached LoRA adapters (`~660–750 MiB`)** (`lora_arena` + `warp34`'s automatic `512 MiB → 1,056 MiB` `scratch_arena` expansion),
    - **Desktop OS & Browser VRAM (`~600–900 MiB`)** (Windows 11 DWM / Linux Wayland compositor + multi-monitor + hardware-accelerated browser), and
-   - **`w34`'s internal `1,024 MiB` post-pool floor (`MIN_HEADROOM_BYTES`)**,
+   - **`warp34`'s internal `1,024 MiB` post-pool floor (`MIN_HEADROOM_BYTES`)**,
    —all three existing `W2.6A16-HGPTQ-RCO` checkpoints (`9B` on `8 GB`, `27B` on `16 GB`, `35B-A3B` on `16 GB`) and `9B-W4A16-HGPTQ` (`12 GB`) land cleanly inside their target brackets without requiring `--kv-format tq4_all` or closing desktop apps.
 
 ---
 
-## 2. Measured `w34` Throughput on Consumer GPUs (`RTX 3060 12 GB` & `RTX 4060 Ti 16 GB`)
+## 2. Measured `warp34` Throughput on Consumer GPUs (`RTX 3060 12 GB` & `RTX 4060 Ti 16 GB`)
 
-All benchmarks run with `w34 bench --tp 1 --kv-format tq4 --prompt-len 512 --gen-len 128` (`CUDA Graph` enabled):
+All benchmarks run with `warp34 bench --tp 1 --kv-format tq4 --prompt-len 512 --gen-len 128` (`CUDA Graph` enabled):
 
 | GPU (`SM`, Bus, BW) | Checkpoint (`nchapman/*`) | Mode | Prefill (`tok/s`) | Decode (`tok/s`) | Mean Tokens / Verify Round | Inter-Token Latency (`ITL`) |
 |---|---|---|---:|---:|---:|---:|
@@ -49,37 +49,37 @@ All benchmarks run with `w34 bench --tp 1 --kv-format tq4 --prompt-len 512 --gen
 
 ---
 
-## 3. How `w34` Manages Consumer VRAM Under the Hood
+## 3. How `warp34` Manages Consumer VRAM Under the Hood
 
-Inspection of `crates/w34-host/src/cuda.rs`, `rank_capacity.rs`, `rank.rs`, `cache.rs`, and `lora.rs` in `warp-34` reveals four key memory-planning rules:
+Inspection of `crates/warp34-host/src/cuda.rs`, `rank_capacity.rs`, `rank.rs`, `cache.rs`, and `lora.rs` in `warp34` reveals four key memory-planning rules:
 
 ### A. Automatic Zero-Copy `embed_tokens` Offload (`use_host_embed`)
 When keeping untied `embed_tokens` (`1,940 MiB` FP16 on `9B`, `2,425 MiB` on `27B`, `970 MiB` on `35B-A3B`) in GPU `weight_arena` would leave `< 2.0 GiB` of post-boot VRAM slack (`HOST_EMBED_GPU_RESIDENCY_MIN_SLACK_BYTES`), `plan_host_embed_with_serving_budget` automatically places `embed_tokens` in pinned PCIe `MappedHostBuffer` (system RAM) while keeping `lm_head` (`W8_g64`) in GPU VRAM.
 - Because `embed_tokens` is a sparse row lookup (`8–10 KiB` per token) rather than a GEMM, PCIe zero-copy lookup takes `< 1 µs` and has **zero impact on decode throughput**.
-- In addition, `w34` lazily skips `visual.*` (`~235 MiB`) until an image request arrives and skips `mtp.*` (`240–433 MiB`) unless `--speculative mtp` is enabled.
+- In addition, `warp34` lazily skips `visual.*` (`~235 MiB`) until an image request arrives and skips `mtp.*` (`240–433 MiB`) unless `--speculative mtp` is enabled.
 
 ### B. Hard `1.0 GiB` Post-Pool Floor (`MIN_HEADROOM_BYTES`) + Elastic GDN Slot Clamping
-At boot, `w34` queries `cuMemGetInfo(&free_vram, &total_vram)` (which already subtracts OS desktop/compositor allocations) and enforces:
-1. **`MIN_HEADROOM_BYTES = 1,024 MiB`**: `w34` never allocates the last `1.0 GiB` of `free_vram`, preserving room for CUDA graph capture (`decode_graph` / `spec_verify_graphs`), cuBLAS workspaces, and desktop compositor spikes.
-2. **Elastic `StateBundlePool` Clamping (`clamp_state_slots`)**: In `w34 serve`, `w34` requests up to `64` GDN recurrent state slots (`146.81 MiB/slot` on `27B`, `61.41 MiB/slot` on `35B-A3B`, `49.13 MiB/slot` on `9B`) and automatically clamps the slot count down (to `8` slots for `--max-num-seqs 2`, or down to `MIN_ACTIVE_STATE_SLOTS = 3`) when `free_vram` is tighter. Extra GDN slots above `3–8` act as an **automatic shock absorber** when a desktop OS or LoRA adapter is active.
+At boot, `warp34` queries `cuMemGetInfo(&free_vram, &total_vram)` (which already subtracts OS desktop/compositor allocations) and enforces:
+1. **`MIN_HEADROOM_BYTES = 1,024 MiB`**: `warp34` never allocates the last `1.0 GiB` of `free_vram`, preserving room for CUDA graph capture (`decode_graph` / `spec_verify_graphs`), cuBLAS workspaces, and desktop compositor spikes.
+2. **Elastic `StateBundlePool` Clamping (`clamp_state_slots`)**: In `warp34 serve`, `warp34` requests up to `64` GDN recurrent state slots (`146.81 MiB/slot` on `27B`, `61.41 MiB/slot` on `35B-A3B`, `49.13 MiB/slot` on `9B`) and automatically clamps the slot count down (to `8` slots for `--max-num-seqs 2`, or down to `MIN_ACTIVE_STATE_SLOTS = 3`) when `free_vram` is tighter. Extra GDN slots above `3–8` act as an **automatic shock absorber** when a desktop OS or LoRA adapter is active.
 
 ### C. Why Default `tq4` Beats `tq4_all` as the Primary Target
-In `crates/w34-host/src/cache.rs`, `--kv-format` defaults to **`tq4`** (`KvFormatPolicy::Tq4`):
+In `crates/warp34-host/src/cache.rs`, `--kv-format` defaults to **`tq4`** (`KvFormatPolicy::Tq4`):
 - **`tq4` (Tail-Anchored TurboQuant):** Keeps the **last 4 full-attention layers** (`N - 4 .. N - 1`, directly before `final_norm` + `lm_head`) in unrotated 8-bit (`FP8 E4M3` `264 B/row` on `sm_89+`, `Q8_0` `272 B/row` on `sm_86`) and all earlier full-attention layers in WHT-256 rotated 4-bit `TQ4` (`132 B/row`).
 - **`tq4_all` (Uniform 4-bit):** Places all full-attention layers in `TQ4` (`132 B/row`).
 - At **`128K` context (`131,072` tokens)**, the total VRAM difference between `tq4` and `tq4_all` is only:
   - **`+264 MiB`** on `Qwen3.6-35B-A3B` (`2` KV heads × `4` tail layers = `3.4% W4` routed-expert equivalent)
   - **`+528 MiB`** (`sm_89+`) / **`+560 MiB`** (`sm_86`) on `Qwen3.8-27B` and `Qwen3.5-9B` (`4` KV heads × `4` tail layers)
-- Sizing checkpoints so **`tq4` works out of the box** ensures default `w34 --kv-pages 8192` commands succeed without extra flags while preserving `FP16`-oracle long-context retrieval accuracy on the final 4 attention layers, leaving `--kv-format tq4_all` as an instant `+264 to +560 MiB` escape hatch.
+- Sizing checkpoints so **`tq4` works out of the box** ensures default `warp34 --kv-pages 8192` commands succeed without extra flags while preserving `FP16`-oracle long-context retrieval accuracy on the final 4 attention layers, leaving `--kv-format tq4_all` as an instant `+264 to +560 MiB` escape hatch.
 
 ### D. LoRA Adapter VRAM Cost (`~660–750 MiB` at `128K` Context)
-When `--lora` / `--lora-modules` is passed (`crates/w34-host/src/lora.rs`), `w34` reserves two GPU allocations:
+When `--lora` / `--lora-modules` is passed (`crates/warp34-host/src/lora.rs`), `warp34` reserves two GPU allocations:
 1. **`lora_arena` (`LoraCapacityReserve::device_bytes_per_rank`) — `~120–220 MiB`**:
    - Pre-rotated FP16 `lora_A` + `lora_B` weights (`~40–140 MiB` per `r=16..32` adapter; $H_{64}$ is folded into `lora_A` at load time),
    - `lowrank_ws_bytes` (`6,144 tokens × max_rank_pad × 4 B` = `~1–3 MiB`),
    - Fixed `+64 MiB` arena margin (`lora.rs:869`).
 2. **`scratch_arena` Expansion (`rank_capacity.rs:311–321`) — `+448 to +544 MiB`**:
-   - Whenever `lora.device_bytes_per_rank > 0` and `requested_kv_pages <= 8192` (`128K` context), `w34` expands `scratch_arena` from `512 MiB` (`DEFAULT_SCRATCH_ARENA_BYTES`) to **`1,056 MiB`** (`TIERED_MOE_SCRATCH_ARENA_BYTES`, `+544 MiB`) for standard/bidirectional-prefix LoRAs or **`960 MiB`** (`MIDLOOP_LORA_SCRATCH_ARENA_BYTES`, `+448 MiB`) for multi-pass `midloop` LoRAs.
+   - Whenever `lora.device_bytes_per_rank > 0` and `requested_kv_pages <= 8192` (`128K` context), `warp34` expands `scratch_arena` from `512 MiB` (`DEFAULT_SCRATCH_ARENA_BYTES`) to **`1,056 MiB`** (`TIERED_MOE_SCRATCH_ARENA_BYTES`, `+544 MiB`) for standard/bidirectional-prefix LoRAs or **`960 MiB`** (`MIDLOOP_LORA_SCRATCH_ARENA_BYTES`, `+448 MiB`) for multi-pass `midloop` LoRAs.
 
 ---
 
@@ -103,7 +103,7 @@ When `--lora` / `--lora-modules` is passed (`crates/w34-host/src/lora.rs`), `w34
 
 On `Qwen3.8-Flash-Next` (`48` layers, `512` routed experts/layer, `hidden=2560`, `moe_intermediate=512`), a single `W4_g64` expert slot is `1.992 MiB` (`2,088,960 B`) and a `W2_g64` expert slot is `1.055 MiB` (`1,105,920 B`):
 - **Mixed-Precision `actual_per_hot_step` Reduction (`-35.3%`):** Across all 48 layers (`12` `W4_g64` + `36` `W2_g64` in `W2.6A16-HGPTQ-RCO`), each `+1` hot expert slot per rank costs **`61.875 MiB`** instead of `95.625 MiB` on pure `W4A16` (`15,840 MiB` vs `24,480 MiB` for all `256` local experts per rank on `TP=2`).
-- **Why `w34` Leaves `6,000 MiB/GPU` Free by Default on `2× 24 GB` (`TP=2`):** In `crates/w34-host/src/model/rank_capacity.rs` (`plan_tiered_moe_hot_per_layer_with_dflash`), `w34` currently divides `available_vram - fixed_overhead` by `per_hot_step` (`48 × 1.992 MiB = 95.625 MiB`, the pure-`W4` upper bound) instead of `actual_per_hot_step` (`61.875 MiB`) and clamps `TP=2` to `TIERED_MOE_TP2_DEFAULT_HOT = 128`. As a result, `w34 serve --tp 2 --kv-pages 8192 --kv-format tq4 --speculative mtp --mtp-k 3` uses **`18,112 MiB` per GPU** (`73.23 tok/s` decode) and leaves **`6,000 MiB` (`5.86 GiB`) free on each `24 GB` card** (`4,638 MiB` free on `1× 24 GB` `TP=1` at `19,489 MiB` used, `26.10 tok/s`).
-- **Unlocking the Saved `W2.6` VRAM for Hot Experts (`k_hot = 160..208` on `TP=2`):** Dividing by `actual_per_hot_step` (`61.875 MiB/slot`) and raising `TIERED_MOE_TP2_DEFAULT_HOT` converts those saved `W2.6` bytes directly into GPU-resident hot experts while keeping 100% (`256 / 256` local experts per GPU = `512 / 512` total) of the Native MTP layer in VRAM:
-  - **`k_hot = 160 / 256` (`320 / 512` = `62.5%` of experts in VRAM, LoRA + Desktop OS sweet spot):** Uses **`21,256 MiB/GPU`** at `128K` `tq4` + `18` GDN slots + `MTP k=3`, leaving **`2,856 MiB/GPU` free** (`+1,612 MiB/GPU` for Desktop OS after `1,024 MiB` `MIN_HEADROOM_BYTES` and `~220 MiB` `lora_arena`; note `scratch_arena` is already `1,056 MiB` on tiered MoE) and boosting throughput to **`502.3 tok/s` prefill** and **`94.92 tok/s` decode (`10.54 ms` ITL)**.
+- **Automatic `actual_per_hot_step` Sizing (`k_hot = 160 / 256` Default on `TP=2`):** In `crates/warp34-host/src/model/rank_capacity.rs` (`plan_tiered_moe_hot_per_layer_with_dflash`), `warp34` divides `available_vram - fixed_overhead` by `actual_per_hot_step` (`61.875 MiB/slot`) and sets `TIERED_MOE_TP2_DEFAULT_HOT = 160` (vs. `128` prior to `7ba4ff9`, which used `18,112 MiB`/GPU at `73.23 tok/s` decode and left `6,000 MiB`/GPU idle).
+- **Scaling from `k_hot = 128` → `160` (Default) → `192–208` (Headless Ceiling) on `TP=2`:** While keeping 100% (`256 / 256` local experts per GPU = `512 / 512` total) of the Native MTP layer in VRAM:
+  - **`k_hot = 160 / 256` (`320 / 512` = `62.5%` of experts in VRAM, `warp34` default & LoRA + Desktop OS sweet spot):** Uses **`21,256 MiB/GPU`** at `128K` `tq4` + `18` GDN slots + `MTP k=3`, leaving **`2,856 MiB/GPU` free** (`+1,612 MiB/GPU` for Desktop OS after `1,024 MiB` `MIN_HEADROOM_BYTES` and `~220 MiB` `lora_arena`; note `scratch_arena` is already `1,056 MiB` on tiered MoE) and reaching **`502.3 tok/s` prefill** and **`94.97 tok/s` decode (`10.53 ms` ITL)** out of the box.
   - **`k_hot = 192–208 / 256` (`384–416 / 512` = `75.0%–81.25%` of experts in VRAM, headless ceiling):** Reaches **`707.6–787.5 tok/s` prefill (`1.95×`)** and **`124.17–131.55 tok/s` decode (`7.60–8.05 ms` ITL, `1.80×` speedup over `k_hot=128`)** on `2× RTX 3090`.

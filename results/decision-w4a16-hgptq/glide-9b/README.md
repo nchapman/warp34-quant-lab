@@ -20,7 +20,7 @@ tags:
 - **Footprint:** `5.33 GiB` total across `200` quantized text linears (text-only decision checkpoint), plus the exact BF16 `readout.safetensors` (`255 × 4096` code-readout head).
 - **Quantization recipe:** 64×64 Sylvester Walsh–Hadamard input rotation (`H_64`) + MSE-initialized Cholesky GPTQ (`group_size=64`, `actorder="static"`, `dampening_frac=0.01`), calibrated layer-by-layer under `noncausal_full_attention` attention.
 - **Architecture & recurrence:** `32` layers (`hidden_size=4096`). Mid-network layer-loop recurrence (`blocks=[[12, 17], [18, 23]]`, `passes=2`, residual scaling `alpha=0.5`) calibrated across all Euler passes.
-- **Canonical weight layout:** All safetensors keys use canonical `model.language_model.*` (and `model.visual.*`) prefixes with `"quantization_status": "compressed"`, loading cleanly with `missing: 0, unexpected: 0` in `Qwen3_5Model.from_pretrained`, `Glide.from_pretrained`, and `warp-34`.
+- **Canonical weight layout:** All safetensors keys use canonical `model.language_model.*` (and `model.visual.*`) prefixes with `"quantization_status": "compressed"`, loading cleanly with `missing: 0, unexpected: 0` in `Qwen3_5Model.from_pretrained`, `Glide.from_pretrained`, and `warp34`.
 
 ## Quality vs. BF16 Base Model (`fastino/GLiDE-9B`)
 
