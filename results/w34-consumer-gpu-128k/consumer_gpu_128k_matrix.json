@@ -30,6 +30,15 @@
       "memory_bandwidth_gb_s": 288.0,
       "total_vram_mib": 16380,
       "headless_free_vram_mib": 15947
+    },
+    "rtx_3090_24gb_x2": {
+      "name": "2x NVIDIA GeForce RTX 3090",
+      "compute_capability": "sm_86",
+      "memory_bus_bits": 384,
+      "memory_bandwidth_gb_s_per_gpu": 936.2,
+      "total_vram_mib_per_gpu": 24576,
+      "headless_free_vram_mib_per_gpu": 24112,
+      "system_ram_gib": 123
     }
   },
   "model_vram_geometry": {
@@ -71,6 +80,23 @@
       "kv_128k_tq4_all_mib": 660.0,
       "kv_128k_tq4_vs_tq4_all_delta_mib": 264.0,
       "gdn_slot_mib": 61.40625
+    },
+    "Qwen3.8-Flash-Next": {
+      "total_safetensors_w26_gib": 71.75,
+      "trunk_mtp_vision_w26_gib": 44.93,
+      "ple_mmap_host_ram_gib": 26.82,
+      "num_layers": 48,
+      "w4_routed_layers": 12,
+      "w2_routed_layers": 36,
+      "num_experts": 512,
+      "w4_expert_stride_mib": 1.9921875,
+      "w2_expert_stride_mib": 1.0546875,
+      "all_w4_per_hot_step_48_layers_mib": 95.625,
+      "rco_w26_actual_per_hot_step_48_layers_mib": 61.875,
+      "kv_128k_tq4_tp1_sm86_mib": 2720.0,
+      "kv_128k_tq4_tp2_per_rank_sm86_mib": 1600.0,
+      "gdn_slot_tp1_mib": 73.6,
+      "gdn_slot_tp2_per_rank_mib": 36.89
     }
   },
   "throughput_benchmarks_tp1_tq4": [
@@ -189,6 +215,131 @@
       "decode_tok_per_s": 190.8,
       "mean_tokens_per_round": 3.62857,
       "itl_ms": 5.24
+    },
+    {
+      "gpu": "1x RTX 3090 24GB (TP=1, k_hot=96/512)",
+      "model": "nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO",
+      "tp": 1,
+      "k_hot_per_rank": 96,
+      "speculative": null,
+      "prompt_len": 512,
+      "gen_len": 64,
+      "prefill_tok_per_s": 278.8,
+      "decode_tok_per_s": 26.10,
+      "itl_ms": 38.31
+    },
+    {
+      "gpu": "1x RTX 3090 24GB (TP=1, k_hot=96/512)",
+      "model": "nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO",
+      "tp": 1,
+      "k_hot_per_rank": 96,
+      "speculative": "mtp_k3",
+      "prompt_len": 512,
+      "gen_len": 64,
+      "prefill_tok_per_s": 278.2,
+      "decode_tok_per_s": 24.04,
+      "mean_tokens_per_round": 3.9375,
+      "itl_ms": 41.59
+    },
+    {
+      "gpu": "2x RTX 3090 24GB (TP=2, default k_hot=128/256)",
+      "model": "nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO",
+      "tp": 2,
+      "k_hot_per_rank": 128,
+      "speculative": null,
+      "prompt_len": 512,
+      "gen_len": 64,
+      "prefill_tok_per_s": 393.6,
+      "decode_tok_per_s": 50.32,
+      "itl_ms": 19.87
+    },
+    {
+      "gpu": "2x RTX 3090 24GB (TP=2, default k_hot=128/256)",
+      "model": "nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO",
+      "tp": 2,
+      "k_hot_per_rank": 128,
+      "speculative": "mtp_k3",
+      "prompt_len": 512,
+      "gen_len": 64,
+      "prefill_tok_per_s": 403.5,
+      "decode_tok_per_s": 73.23,
+      "mean_tokens_per_round": 3.9375,
+      "itl_ms": 13.65
+    },
+    {
+      "gpu": "2x RTX 3090 24GB (TP=2, k_hot=160/256 = 62.5% VRAM experts)",
+      "model": "nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO",
+      "tp": 2,
+      "k_hot_per_rank": 160,
+      "speculative": null,
+      "prompt_len": 512,
+      "gen_len": 64,
+      "prefill_tok_per_s": 513.9,
+      "decode_tok_per_s": 59.69,
+      "itl_ms": 16.75
+    },
+    {
+      "gpu": "2x RTX 3090 24GB (TP=2, k_hot=160/256 = 62.5% VRAM experts)",
+      "model": "nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO",
+      "tp": 2,
+      "k_hot_per_rank": 160,
+      "speculative": "mtp_k3",
+      "prompt_len": 512,
+      "gen_len": 64,
+      "prefill_tok_per_s": 502.3,
+      "decode_tok_per_s": 94.92,
+      "mean_tokens_per_round": 3.9375,
+      "itl_ms": 10.54
+    },
+    {
+      "gpu": "2x RTX 3090 24GB (TP=2, k_hot=192/256 = 75.0% VRAM experts)",
+      "model": "nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO",
+      "tp": 2,
+      "k_hot_per_rank": 192,
+      "speculative": null,
+      "prompt_len": 512,
+      "gen_len": 64,
+      "prefill_tok_per_s": 721.4,
+      "decode_tok_per_s": 71.37,
+      "itl_ms": 14.01
+    },
+    {
+      "gpu": "2x RTX 3090 24GB (TP=2, k_hot=192/256 = 75.0% VRAM experts)",
+      "model": "nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO",
+      "tp": 2,
+      "k_hot_per_rank": 192,
+      "speculative": "mtp_k3",
+      "prompt_len": 512,
+      "gen_len": 64,
+      "prefill_tok_per_s": 707.6,
+      "decode_tok_per_s": 124.17,
+      "mean_tokens_per_round": 3.9375,
+      "itl_ms": 8.05
+    },
+    {
+      "gpu": "2x RTX 3090 24GB (TP=2, k_hot=208/256 = 81.25% VRAM experts)",
+      "model": "nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO",
+      "tp": 2,
+      "k_hot_per_rank": 208,
+      "speculative": null,
+      "prompt_len": 512,
+      "gen_len": 64,
+      "prefill_tok_per_s": 780.0,
+      "decode_tok_per_s": 74.02,
+      "itl_ms": 13.51
+    },
+    {
+      "gpu": "2x RTX 3090 24GB (TP=2, k_hot=208/256 = 81.25% VRAM experts)",
+      "model": "nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO",
+      "tp": 2,
+      "k_hot_per_rank": 208,
+      "speculative": "mtp_k3",
+      "prompt_len": 512,
+      "gen_len": 64,
+      "prefill_tok_per_s": 787.5,
+      "decode_tok_per_s": 131.55,
+      "mean_tokens_per_round": 3.9375,
+      "itl_ms": 7.60
     }
   ],
   "serving_128k_vram_and_safety_buffers": {
@@ -254,6 +405,58 @@
       "desktop_os_buffer_remaining_tq4_mib": 221,
       "desktop_os_buffer_remaining_tq4_all_mib": 485,
       "headless_max_w4_pct_tq4": 42
+    },
+    "24gb_tp1_qwen38_flash_next_w26": {
+      "model": "nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO",
+      "tp": 1,
+      "w4_routed_share_pct": 25,
+      "bpw_routed_experts": 2.5,
+      "k_hot_default": 96,
+      "local_experts": 512,
+      "tq4_mtp_k3_128k_used_mib": 19489,
+      "tq4_mtp_k3_128k_free_mib": 4638,
+      "tq4_128k_gdn_slots": 20,
+      "lora_arena_only_reserve_mib": 220,
+      "desktop_os_buffer_remaining_tq4_mib": 3394
+    },
+    "2x24gb_tp2_qwen38_flash_next_w26_default_khot128": {
+      "model": "nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO",
+      "tp": 2,
+      "w4_routed_share_pct": 25,
+      "bpw_routed_experts": 2.5,
+      "k_hot_per_rank": 128,
+      "local_experts_per_rank": 256,
+      "tq4_mtp_k3_128k_used_mib_per_rank": 18112,
+      "tq4_mtp_k3_128k_free_mib_per_rank": 6000,
+      "tq4_128k_gdn_slots": 18,
+      "lora_arena_only_reserve_mib": 220,
+      "desktop_os_buffer_remaining_tq4_mib": 4756
+    },
+    "2x24gb_tp2_qwen38_flash_next_w26_khot160_lora_desktop": {
+      "model": "nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO",
+      "tp": 2,
+      "w4_routed_share_pct": 25,
+      "bpw_routed_experts": 2.5,
+      "k_hot_per_rank": 160,
+      "local_experts_per_rank": 256,
+      "total_vram_experts": 320,
+      "tq4_mtp_k3_128k_used_mib_per_rank": 21256,
+      "tq4_mtp_k3_128k_free_mib_per_rank": 2856,
+      "tq4_128k_gdn_slots": 18,
+      "lora_arena_only_reserve_mib": 220,
+      "desktop_os_buffer_remaining_tq4_mib": 1612
+    },
+    "2x24gb_tp2_qwen38_flash_next_w26_khot184_192_headless": {
+      "model": "nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO",
+      "tp": 2,
+      "w4_routed_share_pct": 25,
+      "bpw_routed_experts": 2.5,
+      "k_hot_per_rank_serve_128k": 184,
+      "k_hot_per_rank_bench": 208,
+      "local_experts_per_rank": 256,
+      "tq4_mtp_k3_128k_used_mib_per_rank": 23728,
+      "tq4_mtp_k3_128k_free_mib_per_rank": 384,
+      "tq4_128k_gdn_slots": 18
     }
   }
 }
