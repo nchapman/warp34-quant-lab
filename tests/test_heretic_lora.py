@@ -26,6 +26,7 @@ from warp_quant.heretic_lora import (
     compute_lora_factors,
     compute_orthogonal_refusal_directions,
     compute_pareto_front,
+    export_gguf_lora_adapter,
     get_last_token_logits,
     interpolate_direction,
     is_refusal_response,
@@ -282,3 +283,109 @@ def test_cli_heretic_lora_parser_and_presets() -> None:
         ]
     )
     assert [r["trial"] for r in pareto] == [1, 2]
+
+
+def test_export_gguf_lora_adapter_v_head_reorder_and_3d_experts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sys
+
+    recorded: dict[str, object] = {"kv": {}, "tensors": {}}
+
+    class _FakeGGUFWriter:
+        def __init__(self, path: str, arch: str) -> None:
+            recorded["path"] = path
+            recorded["arch"] = arch
+
+        def add_type(self, t: object) -> None:
+            recorded["type"] = t
+
+        def add_string(self, k: str, v: str) -> None:
+            recorded["kv"][k] = v  # type: ignore[index]
+
+        def add_float32(self, k: str, v: float) -> None:
+            recorded["kv"][k] = v  # type: ignore[index]
+
+        def add_tensor(self, name: str, arr: object) -> None:
+            recorded["tensors"][name] = arr  # type: ignore[index]
+
+        def write_header_to_file(self) -> None:
+            pass
+
+        def write_kv_data_to_file(self) -> None:
+            pass
+
+        def write_tensors_to_file(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    fake_gguf = SimpleNamespace(
+        GGUFWriter=_FakeGGUFWriter,
+        GGUFType=SimpleNamespace(ADAPTER="adapter"),
+    )
+    monkeypatch.setitem(sys.modules, "gguf", fake_gguf)
+
+    # nk=2, nv=4, hd=3 -> v_dim=12, qk_dim=2*2*3=12
+    cfg = {
+        "text_config": {
+            "model_type": "qwen4_exp_text",
+            "linear_num_key_heads": 2,
+            "linear_num_value_heads": 4,
+            "linear_value_head_dim": 3,
+        }
+    }
+    ssm_out_a = torch.arange(24, dtype=torch.float32).reshape(2, 12)
+    ssm_out_b = torch.ones((8, 2), dtype=torch.float32)
+    in_proj_z_a = torch.ones((2, 8), dtype=torch.float32)
+    in_proj_z_b = torch.arange(24, dtype=torch.float32).reshape(12, 2)
+    in_proj_qkv_a = torch.ones((2, 8), dtype=torch.float32)
+    in_proj_qkv_b = torch.arange(48, dtype=torch.float32).reshape(24, 2)
+    # 3D experts: E=3, r=2, d_in=5, d_out=8 -> lora_A=(6, 5), lora_B=(8, 6)
+    exp_a = torch.arange(30, dtype=torch.float32).reshape(6, 5)
+    exp_b = torch.arange(48, dtype=torch.float32).reshape(8, 6)
+
+    deltas = {
+        "model.language_model.layers.0.linear_attn.out_proj": (ssm_out_a, ssm_out_b),
+        "model.language_model.layers.0.linear_attn.in_proj_z": (in_proj_z_a, in_proj_z_b),
+        "model.language_model.layers.0.linear_attn.in_proj_qkv": (in_proj_qkv_a, in_proj_qkv_b),
+        "model.language_model.layers.0.mlp.experts.down_proj": (exp_a, exp_b),
+    }
+
+    out_file = export_gguf_lora_adapter(
+        tmp_path / "test.gguf",
+        deltas,
+        lora_rank=2,
+        lora_alpha=4.0,
+        config=cfg,
+        dtype="f32",
+    )
+    assert out_file == tmp_path / "test.gguf"
+    assert recorded["arch"] == "qwen4exp"
+    assert recorded["kv"]["adapter.lora.alpha"] == 4.0  # type: ignore[index]
+
+    tensors = recorded["tensors"]  # type: ignore[assignment]
+    expected_ssm_a = ssm_out_a.reshape(2, 2, 2, 3).permute(0, 2, 1, 3).reshape(2, 12).numpy()
+    assert torch.allclose(
+        torch.from_numpy(tensors["blk.0.ssm_out.weight.lora_a"]), torch.from_numpy(expected_ssm_a)
+    )
+
+    expected_gate_b = in_proj_z_b.reshape(2, 2, 3, 2).permute(1, 0, 2, 3).reshape(12, 2).numpy()
+    assert torch.allclose(
+        torch.from_numpy(tensors["blk.0.attn_gate.weight.lora_b"]), torch.from_numpy(expected_gate_b)
+    )
+
+    expected_qkv_b = torch.cat(
+        [
+            in_proj_qkv_b[:12],
+            in_proj_qkv_b[12:].reshape(2, 2, 3, 2).permute(1, 0, 2, 3).reshape(12, 2),
+        ],
+        dim=0,
+    ).numpy()
+    assert torch.allclose(
+        torch.from_numpy(tensors["blk.0.attn_qkv.weight.lora_b"]), torch.from_numpy(expected_qkv_b)
+    )
+
+    assert tensors["blk.0.ffn_down_exps.weight.lora_a"].shape == (3, 2, 5)
+    assert tensors["blk.0.ffn_down_exps.weight.lora_b"].shape == (3, 8, 2)

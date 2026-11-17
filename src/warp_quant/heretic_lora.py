@@ -832,51 +832,143 @@ def count_refusals(
     return refusals, responses
 
 
+def _resolve_gguf_arch_and_gdn_heads(
+    config: Any | None,
+    arch: str | None,
+    linear_num_key_heads: int | None,
+    linear_num_value_heads: int | None,
+    linear_value_head_dim: int | None,
+) -> tuple[str, int, int, int]:
+    text_cfg = config
+    if text_cfg is not None:
+        if hasattr(text_cfg, "get_text_config"):
+            text_cfg = text_cfg.get_text_config()
+        elif isinstance(text_cfg, dict) and isinstance(text_cfg.get("text_config"), dict):
+            text_cfg = text_cfg["text_config"]
+
+    def _get(key: str, default: Any = None) -> Any:
+        if text_cfg is None:
+            return default
+        if isinstance(text_cfg, dict):
+            return text_cfg.get(key, default)
+        return getattr(text_cfg, key, default)
+
+    if arch is None:
+        model_type = str(_get("model_type", "") or "")
+        if "qwen4_exp" in model_type:
+            resolved_arch = "qwen4exp"
+        elif "moe" in model_type or int(_get("num_experts", 0) or _get("num_local_experts", 0) or 0) > 0:
+            resolved_arch = "qwen35moe"
+        else:
+            resolved_arch = "qwen35"
+    else:
+        resolved_arch = arch
+
+    nk = (
+        int(linear_num_key_heads)
+        if linear_num_key_heads is not None
+        else int(_get("linear_num_key_heads", 0) or 0)
+    )
+    nv = (
+        int(linear_num_value_heads)
+        if linear_num_value_heads is not None
+        else int(_get("linear_num_value_heads", 0) or 0)
+    )
+    hd = (
+        int(linear_value_head_dim)
+        if linear_value_head_dim is not None
+        else int(_get("linear_value_head_dim", 128) or 128)
+    )
+    return resolved_arch, nk, nv, hd
+
+
 def export_gguf_lora_adapter(
     output_path: Path,
     deltas: dict[str, tuple[Tensor, Tensor]],
     *,
     lora_rank: int,
-    arch: str = "qwen4exp",
+    lora_alpha: float | None = None,
+    arch: str | None = None,
+    config: Any | None = None,
+    linear_num_key_heads: int | None = None,
+    linear_num_value_heads: int | None = None,
+    linear_value_head_dim: int | None = None,
     dtype: str = "f16",
 ) -> Path:
     """Export `(lora_A, lora_B)` PEFT dictionary to a `llama.cpp`-compatible `.gguf` LoRA adapter."""
     import gguf
     import numpy as np
 
+    resolved_arch, nk, nv, hd = _resolve_gguf_arch_and_gdn_heads(
+        config,
+        arch if arch is not None else ("qwen4exp" if config is None else None),
+        linear_num_key_heads,
+        linear_num_value_heads,
+        linear_value_head_dim,
+    )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    writer = gguf.GGUFWriter(str(output_path), arch)
+    writer = gguf.GGUFWriter(str(output_path), resolved_arch)
     writer.add_type(gguf.GGUFType.ADAPTER)
     writer.add_string("adapter.type", "lora")
-    writer.add_float32("adapter.lora.alpha", float(lora_rank))
+    writer.add_float32("adapter.lora.alpha", float(lora_alpha if lora_alpha is not None else lora_rank))
 
     r = max(1, int(lora_rank))
     np_dtype = np.float16 if dtype == "f16" else np.float32
+
+    suffix_to_gguf = {
+        "self_attn.q_proj": "attn_q",
+        "self_attn.k_proj": "attn_k",
+        "self_attn.v_proj": "attn_v",
+        "self_attn.o_proj": "attn_output",
+        "linear_attn.in_proj_qkv": "attn_qkv",
+        "linear_attn.in_proj_z": "attn_gate",
+        "linear_attn.in_proj_a": "ssm_alpha",
+        "linear_attn.in_proj_b": "ssm_beta",
+        "linear_attn.out_proj": "ssm_out",
+        "mlp.gate_proj": "ffn_gate",
+        "mlp.up_proj": "ffn_up",
+        "mlp.down_proj": "ffn_down",
+        "mlp.shared_expert.gate_proj": "ffn_gate_shexp",
+        "mlp.shared_experts.gate_proj": "ffn_gate_shexp",
+        "mlp.shared_expert.up_proj": "ffn_up_shexp",
+        "mlp.shared_experts.up_proj": "ffn_up_shexp",
+        "mlp.shared_expert.down_proj": "ffn_down_shexp",
+        "mlp.shared_experts.down_proj": "ffn_down_shexp",
+        "mlp.experts.down_proj": "ffn_down_exps",
+        "mlp.experts": "ffn_down_exps",
+        "ple.value_proj": "ple_value",
+    }
 
     for full_name, (lora_A, lora_B) in sorted(deltas.items()):
         a_f = lora_A.detach().to(torch.float32).cpu().numpy()
         b_f = lora_B.detach().to(torch.float32).cpu().numpy()
 
         gguf_base: str | None = None
-        is_3d_exp = False
+        gguf_mod: str | None = None
         if ".layers." in full_name:
             rest = full_name.split(".layers.", 1)[1]
             l_str, suffix = rest.split(".", 1)
-            if suffix == "self_attn.o_proj":
-                gguf_base = f"blk.{l_str}.attn_output.weight"
-            elif suffix == "linear_attn.out_proj":
-                gguf_base = f"blk.{l_str}.ssm_out.weight"
-            elif suffix in ("mlp.shared_expert.down_proj", "mlp.shared_experts.down_proj"):
-                gguf_base = f"blk.{l_str}.ffn_down_shexp.weight"
-            elif suffix == "mlp.down_proj":
-                gguf_base = f"blk.{l_str}.ffn_down.weight"
-            elif suffix == "mlp.experts.down_proj":
-                gguf_base = f"blk.{l_str}.ffn_down_exps.weight"
-                is_3d_exp = True
-            elif suffix == "ple.value_proj":
-                gguf_base = f"blk.{l_str}.ple_value.weight"
-        if gguf_base is None:
+            gguf_mod = suffix_to_gguf.get(suffix)
+            if gguf_mod is not None:
+                gguf_base = f"blk.{l_str}.{gguf_mod}.weight"
+        if gguf_base is None or gguf_mod is None:
             raise ValueError(f"Unsupported module name for GGUF LoRA export: {full_name!r}")
+
+        is_3d_exp = gguf_mod == "ffn_down_exps"
+        if nk > 0 and nv > 0 and nk != nv:
+            # llama.cpp _LinearAttentionVReorderBase reorders V heads from grouped
+            # (num_k_heads, num_v_per_k, head_v_dim) to tiled (num_v_per_k, num_k_heads, head_v_dim).
+            num_v_per_k = nv // nk
+            v_dim = nk * num_v_per_k * hd
+            perm = np.arange(v_dim).reshape(nk, num_v_per_k, hd).transpose(1, 0, 2).reshape(v_dim)
+            if gguf_mod == "ssm_out" and a_f.shape[-1] == v_dim:
+                a_f = a_f[:, perm].copy()
+            elif gguf_mod == "attn_gate" and b_f.shape[0] == v_dim:
+                b_f = b_f[perm, :].copy()
+            elif gguf_mod == "attn_qkv" and b_f.shape[0] > v_dim:
+                qk_dim = b_f.shape[0] - v_dim
+                b_f = np.concatenate([b_f[:qk_dim, :], b_f[qk_dim:, :][perm, :]], axis=0).copy()
 
         if is_3d_exp:
             # PEFT ParamWrapper stores lora_A as (E * r, d_in) and lora_B as (d_out, r * E).
@@ -1695,6 +1787,13 @@ def _run_heretic_lora_streaming_qwen4_exp(
             lora_rank=lora_rank,
             summary=p_rec,
         )
+        export_gguf_lora_adapter(
+            pareto_dir / f"{output_dir.name}.gguf",
+            trial_deltas[t_i],
+            lora_rank=lora_rank,
+            arch="qwen4exp",
+            config=text_config,
+        )
         p_rec["pareto_dir"] = str(pareto_dir)
         print(
             f"  [Pareto {p_idx}] Trial {t_i} -> refusals={p_rec['refusals']}/{p_rec['total_eval']} "
@@ -1731,6 +1830,7 @@ def _run_heretic_lora_streaming_qwen4_exp(
         best_deltas,
         lora_rank=lora_rank,
         arch="qwen4exp",
+        config=text_config,
     )
     print(
         f"[heretic-lora] Saved adapter ({len(best_deltas)} modules, r={lora_rank}) to {output_dir} "
@@ -1951,6 +2051,12 @@ def run_heretic_lora(args: argparse.Namespace) -> dict[str, Any]:
                 lora_rank=lora_rank,
                 summary=p_rec,
             )
+            export_gguf_lora_adapter(
+                pareto_dir / f"{output_dir.name}.gguf",
+                p_deltas,
+                lora_rank=lora_rank,
+                config=model.config,
+            )
             p_rec["pareto_dir"] = str(pareto_dir)
             print(
                 f"  [Pareto {p_idx}] Trial {p_rec['trial']} -> refusals={p_rec['refusals']}/{p_rec['total_eval']} "
@@ -1990,6 +2096,12 @@ def run_heretic_lora(args: argparse.Namespace) -> dict[str, Any]:
         base_model_name_or_path=hub_id,
         lora_rank=lora_rank,
         summary=summary,
+    )
+    export_gguf_lora_adapter(
+        output_dir / f"{output_dir.name}.gguf",
+        best_deltas,
+        lora_rank=lora_rank,
+        config=model.config,
     )
     print(
         f"[heretic-lora] Saved adapter ({len(best_deltas)} modules, r={lora_rank}) to {output_dir} "
