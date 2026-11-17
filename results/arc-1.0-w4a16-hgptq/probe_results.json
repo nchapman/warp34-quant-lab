@@ -1,0 +1,59 @@
+{
+  "model": "arc-1.0",
+  "base_model": "rayline-ai/ARC-1.0",
+  "base_revision": "f16e93f2581b3690938e47206881c7926e1ff341",
+  "quant_repo": "nchapman/ARC-1.0-W4A16-HGPTQ",
+  "recipe": {
+    "algo": "W4A16-HGPTQ",
+    "group_size": 64,
+    "hadamard_block_size": 64,
+    "actorder": "static",
+    "dampening_frac": 0.01,
+    "rope": "yarn-f4",
+    "num_samples": 256,
+    "max_seq_length": 1024
+  },
+  "readout_fidelity": {
+    "goldens_54_cosine_mean": 0.9822173273121869,
+    "goldens_54_cosine_min": 0.9693410992622375,
+    "decide_50_text_cosine_mean": 0.972726,
+    "decide_50_text_cosine_min": 0.954829
+  },
+  "signals_fidelity": {
+    "signals_mae_mean": 0.011331150593670838,
+    "signals_mae_max": 0.46879483997573246,
+    "topic_domain_top1": "48/54 (88.9%)",
+    "topic_operation_top1": "49/54 (90.7%)",
+    "pii_payload_binary_acc": "808/810 (99.75%)"
+  },
+  "decide_parity": {
+    "production_prices_top1_vs_bf16": "50/54 (92.6%)",
+    "production_prices_score_mae": 0.04349,
+    "unmasked_qwen_slots": {
+      "53": {
+        "name": "qwen3.8-flash-next",
+        "wire": "qwen/qwen3.8-flash-next",
+        "served_arms": 8,
+        "actions": 2
+      },
+      "54": {
+        "name": "qwen3.5-9b",
+        "wire": "qwen/qwen3.5-9b",
+        "served_arms": 16,
+        "actions": 4
+      },
+      "55": {
+        "name": "qwen3.8-27b",
+        "wire": "qwen/qwen3.8-27b",
+        "served_arms": 16,
+        "actions": 4
+      }
+    }
+  },
+  "question_head_fidelity": {
+    "addon": "question_head/qh4in-full-e3",
+    "layers": "12..23",
+    "readout_cosine_mean": 0.9949554204940796,
+    "pointer_prob_mae": 0.028633487100402515
+  }
+}

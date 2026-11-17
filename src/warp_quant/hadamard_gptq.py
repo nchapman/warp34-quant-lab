@@ -1158,7 +1158,11 @@ def run_quantize(args: argparse.Namespace) -> None:
         if not list(Path(hub_id).glob("*.safetensors")):
             raise RuntimeError(f"Base snapshot {hub_id} has no .safetensors shards")
 
+    from warp_quant.arc import is_arc_checkpoint, run_quantize_arc
     from warp_quant.decision import is_code_readout_checkpoint, run_quantize_decision
+
+    if is_arc_checkpoint(hub_id):
+        return run_quantize_arc(args)
 
     if is_code_readout_checkpoint(hub_id):
         return run_quantize_decision(args)
@@ -2235,7 +2239,15 @@ def run_probe(args: argparse.Namespace) -> None:
         if Path(hub_id).exists()
         else Path(resolve_snapshot(hub_id, revision=info.get("hub_revision")))
     )
+    from warp_quant.arc import is_arc_checkpoint, run_probe_arc
     from warp_quant.decision import is_code_readout_checkpoint, run_probe_decision
+
+    if is_arc_checkpoint(base_dir):
+        for qd in quant_dirs:
+            sub_args = copy.copy(args)
+            sub_args.quant = str(qd)
+            run_probe_arc(sub_args)
+        return
 
     if is_code_readout_checkpoint(base_dir):
         for qd in quant_dirs:
