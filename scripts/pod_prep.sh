@@ -90,7 +90,8 @@ rssh "bash -se" "$REMOTE_DIR" <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:/root/.local/bin:$PATH"
 cd "$1"
-uv sync --prerelease=allow
+rm -rf .venv
+uv sync --python 3.12 --prerelease=allow
 bash scripts/install_gpu_kernels.sh
 REMOTE
 

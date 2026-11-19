@@ -1959,29 +1959,24 @@ def _load_mtp_module_from_checkpoint(
 
 
 @torch.no_grad()
-def evaluate_mtp_fidelity(
+def _capture_base_mtp_cache(
     base_model: nn.Module,
-    quant_model: nn.Module,
     processor,
     base_dir: Path,
-    quant_dir: Path,
     eval_path: Path,
     per_domain: int = 2,
     max_tokens: int = 512,
-) -> dict[str, dict]:
-    """Evaluate Native MTP teacher-forced KL & top-1 agreement (both isolated and end-to-end)."""
-    from warp_quant.data import align_mtp, compare_logits, select_text_rows, summarize
+) -> list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+    """Pre-compute BF16 base language + MTP hidden states on GPU and store them on CPU."""
+    from warp_quant.data import align_mtp, select_text_rows
 
     device = next(base_model.parameters()).device
     base_mtp = _load_mtp_module_from_checkpoint(base_dir, base_model.config, device)
-    quant_mtp = _load_mtp_module_from_checkpoint(quant_dir, base_model.config, device)
     embed = base_model.get_input_embeddings()
-    base_lm_head = base_model.get_output_embeddings()
-    quant_lm_head = quant_model.get_output_embeddings()
-
     selected = select_text_rows(str(eval_path), per_domain)
-    isolated_rows = []
-    e2e_rows = []
+    cached: list[
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+    ] = []
     try:
         for _, _domain, messages in selected:
             text = processor.apply_chat_template(messages, tokenize=False)
@@ -1996,18 +1991,99 @@ def evaluate_mtp_fidelity(
                 continue
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 base_out = base_model.model.language_model(input_ids=ids, use_cache=False)
-                quant_out = quant_model.model.language_model(input_ids=ids, use_cache=False)
                 h_base, next_ids, pos, labels = align_mtp(ids, base_out.last_hidden_state)
-                h_quant, _, _, _ = align_mtp(ids, quant_out.last_hidden_state)
                 emb = embed(next_ids)
                 mtp_h_base = base_mtp(h_base, emb, pos)
-                mtp_h_iso = quant_mtp(h_base, emb, pos)
-                mtp_h_e2e = quant_mtp(h_quant, emb, pos)
-                ref_logits = base_lm_head(mtp_h_base)
-                iso_logits = base_lm_head(mtp_h_iso)
-                e2e_logits = quant_lm_head(mtp_h_e2e)
-            isolated_rows.append(compare_logits(ref_logits, iso_logits, labels))
-            e2e_rows.append(compare_logits(ref_logits, e2e_logits, labels))
+            cached.append(
+                (
+                    ids.cpu(),
+                    h_base.cpu(),
+                    emb.cpu(),
+                    pos.cpu(),
+                    mtp_h_base.cpu(),
+                    labels.cpu(),
+                )
+            )
+    finally:
+        del base_mtp
+        torch.cuda.empty_cache()
+    return cached
+
+
+def evaluate_mtp_fidelity(
+    base_model: nn.Module,
+    quant_model: nn.Module,
+    processor,
+    base_dir: Path,
+    quant_dir: Path,
+    eval_path: Path,
+    per_domain: int = 2,
+    max_tokens: int = 512,
+    base_mtp_cache: list[tuple[torch.Tensor, ...]] | None = None,
+) -> dict[str, dict]:
+    """Evaluate Native MTP teacher-forced KL & top-1 agreement (both isolated and end-to-end)."""
+    from warp_quant.data import align_mtp, compare_logits, select_text_rows, summarize
+
+    device = next(quant_model.parameters()).device
+    base_mtp = (
+        None
+        if base_mtp_cache is not None
+        else _load_mtp_module_from_checkpoint(base_dir, base_model.config, device)
+    )
+    quant_mtp = _load_mtp_module_from_checkpoint(quant_dir, base_model.config, device)
+    embed = None if base_mtp_cache is not None else base_model.get_input_embeddings()
+    base_lm_head = base_model.get_output_embeddings()
+    quant_lm_head = quant_model.get_output_embeddings()
+
+    isolated_rows = []
+    e2e_rows = []
+    try:
+        if base_mtp_cache is not None:
+            for ids_c, h_base_c, emb_c, pos_c, mtp_h_base_c, labels_c in base_mtp_cache:
+                ids = ids_c.to(device)
+                h_base = h_base_c.to(device)
+                emb = emb_c.to(device)
+                pos = pos_c.to(device)
+                mtp_h_base = mtp_h_base_c.to(device)
+                labels = labels_c.to(device)
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    quant_out = quant_model.model.language_model(input_ids=ids, use_cache=False)
+                    h_quant, _, _, _ = align_mtp(ids, quant_out.last_hidden_state)
+                    mtp_h_iso = quant_mtp(h_base, emb, pos)
+                    mtp_h_e2e = quant_mtp(h_quant, emb, pos)
+                    ref_logits = base_lm_head(mtp_h_base)
+                    iso_logits = base_lm_head(mtp_h_iso)
+                    e2e_logits = quant_lm_head(mtp_h_e2e)
+                isolated_rows.append(compare_logits(ref_logits, iso_logits, labels))
+                e2e_rows.append(compare_logits(ref_logits, e2e_logits, labels))
+        else:
+            assert base_mtp is not None and embed is not None
+            selected = select_text_rows(str(eval_path), per_domain)
+            for _, _domain, messages in selected:
+                text = processor.apply_chat_template(messages, tokenize=False)
+                ids = processor.tokenizer(
+                    text,
+                    add_special_tokens=False,
+                    truncation=True,
+                    max_length=max_tokens,
+                    return_tensors="pt",
+                )["input_ids"].to(device)
+                if ids.shape[1] < 4:
+                    continue
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    base_out = base_model.model.language_model(input_ids=ids, use_cache=False)
+                    quant_out = quant_model.model.language_model(input_ids=ids, use_cache=False)
+                    h_base, next_ids, pos, labels = align_mtp(ids, base_out.last_hidden_state)
+                    h_quant, _, _, _ = align_mtp(ids, quant_out.last_hidden_state)
+                    emb = embed(next_ids)
+                    mtp_h_base = base_mtp(h_base, emb, pos)
+                    mtp_h_iso = quant_mtp(h_base, emb, pos)
+                    mtp_h_e2e = quant_mtp(h_quant, emb, pos)
+                    ref_logits = base_lm_head(mtp_h_base)
+                    iso_logits = base_lm_head(mtp_h_iso)
+                    e2e_logits = quant_lm_head(mtp_h_e2e)
+                isolated_rows.append(compare_logits(ref_logits, iso_logits, labels))
+                e2e_rows.append(compare_logits(ref_logits, e2e_logits, labels))
     finally:
         del base_mtp, quant_mtp
         torch.cuda.empty_cache()
@@ -2035,7 +2111,9 @@ def evaluate_vision_fidelity(
                 f"Refusing to evaluate Vision on calibration fixture: {vision_data_dir} (calibration=True)"
             )
 
-    device = next(base_model.parameters()).device
+    quant_dev = next(quant_model.parameters()).device
+    base_on_cpu = next(base_model.model.parameters()).device.type == "cpu"
+    device = quant_dev
     processor = AutoProcessor.from_pretrained(str(base_model.config._name_or_path), local_files_only=True)
     rows_path = vision_data_dir / "rows.jsonl"
     fixture_rows = [json.loads(line) for line in rows_path.read_text().splitlines() if line.strip()]
@@ -2044,38 +2122,105 @@ def evaluate_vision_fidelity(
     e2e_rows = []
     orig_base_visual = base_model.model.visual
     try:
-        for row in fixture_rows:
-            encoded, keep, labels = encode_image_row(processor, vision_data_dir, row, max_pixels)
-            inputs = device_inputs(encoded, device)
-            keep_dev, labels_dev = keep.to(device), labels.to(device)
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                # 1. Direct ViT + Merger encoder output comparison
-                vis_ref = orig_base_visual(
-                    inputs["pixel_values"], grid_thw=inputs["image_grid_thw"]
-                ).pooler_output
-                vis_cand = quant_model.model.visual(
-                    inputs["pixel_values"], grid_thw=inputs["image_grid_thw"]
-                ).pooler_output
-                f_m = feature_metrics(vis_ref, vis_cand)
-                cos = F.cosine_similarity(vis_ref.float().flatten(), vis_cand.float().flatten(), dim=0).item()
-                f_m["cos_sim"] = cos
-                encoder_rows.append(f_m)
+        if base_on_cpu:
+            # Two-pass evaluation when GPU cannot hold both BF16 base and decompressed quant models simultaneously.
+            cached_quant: list[tuple[torch.Tensor, torch.Tensor]] = []
+            for row in fixture_rows:
+                encoded, keep, _labels = encode_image_row(processor, vision_data_dir, row, max_pixels)
+                inputs = device_inputs(encoded, device)
+                keep_dev = keep.to(device)
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    vis_cand = quant_model.model.visual(
+                        inputs["pixel_values"], grid_thw=inputs["image_grid_thw"]
+                    ).pooler_output
+                    e2e_logits = quant_model(**inputs, logits_to_keep=keep_dev, use_cache=False).logits
+                cached_quant.append((vis_cand.cpu(), e2e_logits.cpu()))
 
-                # 2. BF16 reference VQA answer logits
+            # Swap language models: keep quant_visual on GPU (~1.2 GiB), offload quant LM, bring base_model to GPU
+            quant_model.model.language_model.to("cpu")
+            quant_lm_head = quant_model.get_output_embeddings()
+            if quant_lm_head is not None:
+                quant_lm_head.to("cpu")
+            torch.cuda.empty_cache()
+            base_model.to(device)
+            try:
+                for row, (vis_cand_c, e2e_logits_c) in zip(fixture_rows, cached_quant, strict=True):
+                    encoded, keep, labels = encode_image_row(processor, vision_data_dir, row, max_pixels)
+                    inputs = device_inputs(encoded, device)
+                    keep_dev, labels_dev = keep.to(device), labels.to(device)
+                    vis_cand = vis_cand_c.to(device)
+                    e2e_logits = e2e_logits_c.to(device)
+                    with torch.autocast("cuda", dtype=torch.bfloat16):
+                        vis_ref = orig_base_visual(
+                            inputs["pixel_values"], grid_thw=inputs["image_grid_thw"]
+                        ).pooler_output
+                        f_m = feature_metrics(vis_ref, vis_cand)
+                        cos = F.cosine_similarity(
+                            vis_ref.float().flatten(), vis_cand.float().flatten(), dim=0
+                        ).item()
+                        f_m["cos_sim"] = cos
+                        encoder_rows.append(f_m)
+
+                        base_model.model.visual = orig_base_visual
+                        ref_logits = base_model(**inputs, logits_to_keep=keep_dev, use_cache=False).logits
+
+                        base_model.model.visual = quant_model.model.visual
+                        iso_logits = base_model(**inputs, logits_to_keep=keep_dev, use_cache=False).logits
+
+                    isolated_rows.append(
+                        {"domain": row["domain"], **compare_logits(ref_logits, iso_logits, labels_dev)}
+                    )
+                    e2e_rows.append(
+                        {"domain": row["domain"], **compare_logits(ref_logits, e2e_logits, labels_dev)}
+                    )
+            finally:
                 base_model.model.visual = orig_base_visual
-                ref_logits = base_model(**inputs, logits_to_keep=keep_dev, use_cache=False).logits
+                base_lm_head = base_model.get_output_embeddings()
+                base_model.model.to("cpu")
+                if base_lm_head is not None:
+                    base_lm_head.to(device)
+                torch.cuda.empty_cache()
+                quant_model.model.language_model.to(device)
+                if quant_lm_head is not None:
+                    quant_lm_head.to(device)
+                torch.cuda.empty_cache()
+        else:
+            for row in fixture_rows:
+                encoded, keep, labels = encode_image_row(processor, vision_data_dir, row, max_pixels)
+                inputs = device_inputs(encoded, device)
+                keep_dev, labels_dev = keep.to(device), labels.to(device)
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    # 1. Direct ViT + Merger encoder output comparison
+                    vis_ref = orig_base_visual(
+                        inputs["pixel_values"], grid_thw=inputs["image_grid_thw"]
+                    ).pooler_output
+                    vis_cand = quant_model.model.visual(
+                        inputs["pixel_values"], grid_thw=inputs["image_grid_thw"]
+                    ).pooler_output
+                    f_m = feature_metrics(vis_ref, vis_cand)
+                    cos = F.cosine_similarity(
+                        vis_ref.float().flatten(), vis_cand.float().flatten(), dim=0
+                    ).item()
+                    f_m["cos_sim"] = cos
+                    encoder_rows.append(f_m)
 
-                # 3. Isolated Vision-only VQA answer logits (quantized visual + BF16 language model)
-                base_model.model.visual = quant_model.model.visual
-                iso_logits = base_model(**inputs, logits_to_keep=keep_dev, use_cache=False).logits
+                    # 2. BF16 reference VQA answer logits
+                    base_model.model.visual = orig_base_visual
+                    ref_logits = base_model(**inputs, logits_to_keep=keep_dev, use_cache=False).logits
 
-                # 4. End-to-end VQA answer logits (quantized visual + quantized language model)
-                e2e_logits = quant_model(**inputs, logits_to_keep=keep_dev, use_cache=False).logits
+                    # 3. Isolated Vision-only VQA answer logits (quantized visual + BF16 language model)
+                    base_model.model.visual = quant_model.model.visual
+                    iso_logits = base_model(**inputs, logits_to_keep=keep_dev, use_cache=False).logits
 
-            isolated_rows.append(
-                {"domain": row["domain"], **compare_logits(ref_logits, iso_logits, labels_dev)}
-            )
-            e2e_rows.append({"domain": row["domain"], **compare_logits(ref_logits, e2e_logits, labels_dev)})
+                    # 4. End-to-end VQA answer logits (quantized visual + quantized language model)
+                    e2e_logits = quant_model(**inputs, logits_to_keep=keep_dev, use_cache=False).logits
+
+                isolated_rows.append(
+                    {"domain": row["domain"], **compare_logits(ref_logits, iso_logits, labels_dev)}
+                )
+                e2e_rows.append(
+                    {"domain": row["domain"], **compare_logits(ref_logits, e2e_logits, labels_dev)}
+                )
     finally:
         base_model.model.visual = orig_base_visual
 
@@ -2284,7 +2429,10 @@ def run_probe(args: argparse.Namespace) -> None:
 
     eval_batches_by_set: list[tuple[Path, list[tuple[str, torch.Tensor]], list[torch.Tensor] | None]] = []
     has_gguf = any(qd.suffix.lower() == ".gguf" for qd in quant_dirs)
-    cache_base_hidden = len(quant_dirs) > 1 or has_gguf
+    base_mem_bytes = sum(p.numel() * p.element_size() for p in base_model.parameters())
+    total_vram_bytes = int(torch.cuda.get_device_properties(0).total_memory)
+    need_cpu_swap = base_mem_bytes * 2.15 > total_vram_bytes
+    cache_base_hidden = len(quant_dirs) > 1 or has_gguf or need_cpu_swap
     for eval_path_str in args.eval_sets:
         eval_path = Path(eval_path_str)
         if not eval_path.is_absolute():
@@ -2300,12 +2448,27 @@ def run_probe(args: argparse.Namespace) -> None:
             ]
         eval_batches_by_set.append((eval_path, batches, b_hidden))
 
+    base_mtp_cache = None
+    if need_cpu_swap and args.eval_mtp:
+        first_eval_path = Path(args.eval_sets[0])
+        if not first_eval_path.is_absolute():
+            first_eval_path = ROOT / first_eval_path
+        log_event("ROT_PROBE_MTP_BASE_CACHE", eval_set=first_eval_path.name, per_domain=args.mtp_per_domain)
+        base_mtp_cache = _capture_base_mtp_cache(
+            base_model,
+            processor,
+            base_dir,
+            first_eval_path,
+            per_domain=args.mtp_per_domain,
+        )
+
     if (
         cache_base_hidden
         and hasattr(base_model, "model")
-        and not args.eval_mtp
-        and not args.eval_vision
-        and not getattr(args, "eval_vision_guard", None)
+        and (
+            need_cpu_swap
+            or (not args.eval_mtp and not args.eval_vision and not getattr(args, "eval_vision_guard", None))
+        )
     ):
         lm_head_mod = base_model.get_output_embeddings()
         base_model.model.to("cpu")
@@ -2396,6 +2559,7 @@ def run_probe(args: argparse.Namespace) -> None:
                     quant_dir,
                     first_eval_path,
                     per_domain=args.mtp_per_domain,
+                    base_mtp_cache=base_mtp_cache,
                 )
                 results["mtp_fidelity"] = mtp_summary
                 log_event(
