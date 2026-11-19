@@ -388,6 +388,13 @@ def test_hadamard_transform_forward_clones_input_and_humming_named_params_guard(
         ):
             super().__init__()
             self.weight = torch.nn.Parameter(torch.eye(4), requires_grad=False)
+            self.weight.partitions = {0: self.weight}
+            self.transforms = {
+                0: types.SimpleNamespace(
+                    scheme=types.SimpleNamespace(type="hadamard", head_dim=4),
+                    args=types.SimpleNamespace(location="input"),
+                )
+            }
 
         def forward(self, value: torch.Tensor, part_id: int = 0) -> torch.Tensor:
             # Simulate vLLM's in-place ops.hadacore_transform mutation
@@ -422,6 +429,232 @@ def test_hadamard_transform_forward_clones_input_and_humming_named_params_guard(
     # Caller's x must NOT be mutated in-place
     assert torch.all(x == 1.0)
     assert torch.all(out == 2.0)
+
+
+def test_hadamard_transform_tp2_shared_weight_and_straddling_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import types
+
+    from compressed_tensors.transform import TransformLocation
+
+    par_mod = types.ModuleType("vllm.distributed.parallel_state")
+    par_mod.get_tensor_model_parallel_world_size = lambda: 2
+    param_mod = types.ModuleType("vllm.model_executor.parameter")
+    param_mod.get_tensor_model_parallel_world_size = lambda: 2
+    comm_mod = types.ModuleType("vllm.distributed.communication_op")
+    ct_mod = types.ModuleType("vllm.model_executor.layers.quantization.compressed_tensors.compressed_tensors")
+    lin_mod = types.ModuleType("vllm.model_executor.layers.quantization.compressed_tensors.transform.linear")
+    ht_mod = types.ModuleType("vllm.model_executor.layers.quantization.compressed_tensors.transform.module")
+    ht_mod.get_tensor_model_parallel_world_size = lambda: 2
+
+    class FakePartition(torch.nn.Parameter):
+        def __new__(cls, data: torch.Tensor) -> FakePartition:
+            return super().__new__(cls, data, requires_grad=False)
+
+        def __init__(self, data: torch.Tensor) -> None:
+            self.tp_rank = 1
+            self.tp_size = 2
+
+    class FakeSharedWeightParameter(torch.nn.Parameter):
+        def __new__(cls, head_dim: int = 16) -> FakeSharedWeightParameter:
+            if param_mod.get_tensor_model_parallel_world_size() > 1:
+                raise NotImplementedError(
+                    "SharedWeightParameter does not currently support tensor parallelism"
+                )
+            return super().__new__(cls, torch.empty(0), requires_grad=False)
+
+        def __init__(self, head_dim: int = 16) -> None:
+            self.partitions = {0: FakePartition(torch.empty((head_dim, head_dim)))}
+
+        def load_row_parallel_weight(self, loaded_weight: torch.Tensor) -> None:
+            part = self.partitions[0]
+            assert part.tp_rank == 0, f"expected tp_rank=0 for replicated Hadamard matrix, got {part.tp_rank}"
+            part.data.copy_(loaded_weight)
+
+        def load_column_parallel_weight(self, loaded_weight: torch.Tensor) -> None:
+            self.load_row_parallel_weight(loaded_weight)
+
+    param_mod.SharedWeightParameter = FakeSharedWeightParameter
+
+    class FakeLinearTransformMethod:
+        pass
+
+    class FakeHadamardTransform(torch.nn.Module):
+        def __init__(
+            self, transforms, layer, weight_loader, input_size_per_partition, output_partition_sizes
+        ):
+            super().__init__()
+            if ht_mod.get_tensor_model_parallel_world_size() > 1:
+                raise NotImplementedError("Online transforms with tensor parallelism is not supported")
+            self.transforms = transforms
+            head_dim = int(transforms[0].scheme.head_dim)
+            self.weight = FakeSharedWeightParameter(head_dim=head_dim)
+
+        def forward(self, value: torch.Tensor, part_id: int = 0) -> torch.Tensor:
+            head_dim = int(self.transforms[part_id].scheme.head_dim)
+            return fast_block_hadamard(value, head_dim)
+
+    lin_mod.CompressedTensorsLinearTransformMethod = FakeLinearTransformMethod
+    ht_mod.HadamardTransform = FakeHadamardTransform
+
+    for name, mod in {
+        "vllm.distributed.parallel_state": par_mod,
+        "vllm.model_executor.parameter": param_mod,
+        "vllm.distributed.communication_op": comm_mod,
+        "vllm.model_executor.layers.quantization.compressed_tensors.compressed_tensors": ct_mod,
+        "vllm.model_executor.layers.quantization.compressed_tensors.transform.linear": lin_mod,
+        "vllm.model_executor.layers.quantization.compressed_tensors.transform.module": ht_mod,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    _patch_ct_linear_transform()
+
+    tfm_16 = {
+        0: types.SimpleNamespace(
+            scheme=types.SimpleNamespace(type="hadamard", head_dim=16),
+            args=types.SimpleNamespace(location=TransformLocation.INPUT),
+        )
+    }
+
+    # Vision linear_fc2: K=4304 = 16*269 -> 2152 per rank under tp=2 (2152 % 16 == 8)
+    layer_r0 = types.SimpleNamespace(tp_size=2, tp_rank=0)
+    layer_r1 = types.SimpleNamespace(tp_size=2, tp_rank=1)
+    ht_r0 = FakeHadamardTransform(tfm_16, layer_r0, None, 2152, [1152])
+    ht_r1 = FakeHadamardTransform(tfm_16, layer_r1, None, 2152, [1152])
+
+    # Simulate LinearBase.update_param_tp_status() overwriting partition.tp_rank = 1 on rank 1
+    ht_r1.weight.partitions[0].tp_rank = 1
+    ht_r1.weight.load_row_parallel_weight(torch.eye(16))
+    assert ht_r1.weight.partitions[0].tp_rank == 0
+
+    full_x = torch.randn(3, 4304, dtype=torch.float32)
+    x_r0 = full_x[:, :2152].contiguous()
+    x_r1 = full_x[:, 2152:].contiguous()
+    boundary_full = torch.cat((x_r0[:, -8:], x_r1[:, :8]), dim=-1)
+    comm_mod.tensor_model_parallel_all_gather = lambda t, dim=-1: boundary_full
+
+    out_r0 = ht_r0(x_r0)
+    out_r1 = ht_r1(x_r1)
+    out_combined = torch.cat((out_r0, out_r1), dim=-1)
+    ref = fast_block_hadamard(full_x, 16)
+    torch.testing.assert_close(out_combined, ref, rtol=1e-5, atol=1e-5)
+
+    # Also verify generic full all_gather fallback (e.g., when _warp_quant_partner_layer is None)
+    ht_r0._warp_quant_partner_layer = None
+    ht_r1._warp_quant_partner_layer = None
+    comm_mod.tensor_model_parallel_all_gather = lambda t, dim=-1: full_x
+    out_r0_fb = ht_r0(x_r0)
+    out_r1_fb = ht_r1(x_r1)
+    torch.testing.assert_close(torch.cat((out_r0_fb, out_r1_fb), dim=-1), ref, rtol=1e-5, atol=1e-5)
+
+
+def test_qwen4_exp_ple_lut4_modern_vocab_parallel_embedding_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import types
+
+    class FakePLEMethod:
+        @staticmethod
+        def from_quant_config(quant_config: object, *args: object, **kwargs: object) -> FakePLEMethod:
+            del quant_config, args, kwargs
+            return FakePLEMethod()
+
+    class FakeVocabEmbedding(torch.nn.Module):
+        def __init__(self, method: CustomLut4PLEMethod, num_rows: int = 32, dim: int = 160) -> None:
+            super().__init__()
+            self.embedding_method = method
+            self.org_vocab_size = num_rows
+            self.embedding_dim = dim
+            self.params_dtype = torch.bfloat16
+            self.shard_indices = types.SimpleNamespace(org_vocab_start_index=0, org_vocab_end_index=num_rows)
+            method.create_weights(
+                self,
+                input_size_per_partition=dim,
+                output_partition_sizes=[num_rows],
+                input_size=dim,
+                output_size=num_rows,
+                params_dtype=torch.bfloat16,
+                weight_loader=self.weight_loader,
+            )
+
+        def weight_loader(
+            self, param: torch.Tensor, loaded_weight: torch.Tensor, checkpoint_start: int = 0
+        ) -> None:
+            rows = loaded_weight.shape[0]
+            param.data[checkpoint_start : checkpoint_start + rows].copy_(loaded_weight)
+
+    class FakeModernNGramEmbedding:
+        def __init__(self, embedding: FakeVocabEmbedding) -> None:
+            self.ngram_embedding = embedding
+            self.split_ngram_parts = 2
+            self.head_dim = 160
+
+        def load_weights(self, weights: object) -> set[str]:
+            return {name for name, _ in weights}  # type: ignore[misc]
+
+    common_mod = types.ModuleType("vllm.models.qwen4_exp.common.ngram_embedding")
+    common_mod.Qwen4ExpPLEEmbeddingMethod = FakePLEMethod  # type: ignore[attr-defined]
+    nvidia_mod = types.ModuleType("vllm.models.qwen4_exp.nvidia.ngram_embedding")
+    nvidia_mod.Qwen4ExpNGramEmbedding = FakeModernNGramEmbedding  # type: ignore[attr-defined]
+
+    for name, mod in {
+        "vllm": types.ModuleType("vllm"),
+        "vllm.models": types.ModuleType("vllm.models"),
+        "vllm.models.qwen4_exp": types.ModuleType("vllm.models.qwen4_exp"),
+        "vllm.models.qwen4_exp.common": types.ModuleType("vllm.models.qwen4_exp.common"),
+        "vllm.models.qwen4_exp.common.ngram_embedding": common_mod,
+        "vllm.models.qwen4_exp.nvidia": types.ModuleType("vllm.models.qwen4_exp.nvidia"),
+        "vllm.models.qwen4_exp.nvidia.ngram_embedding": nvidia_mod,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    _patch_qwen4_exp_ple_lut4()
+
+    qcfg = types.SimpleNamespace(ple_quantization={"format": "custom_lut4_g32_fp16scale", "group_size": 32})
+    method = FakePLEMethod.from_quant_config(qcfg, "model.layers.0.ple.ngram_embedding", None)
+    assert isinstance(method, CustomLut4PLEMethod)
+
+    emb = FakeVocabEmbedding(method, num_rows=32, dim=160)
+    ngram = FakeModernNGramEmbedding(emb)
+
+    torch.manual_seed(7)
+    q0 = torch.randint(0, 16, (16, 160), dtype=torch.uint8)
+    s0 = torch.full((16, 5), 0.5, dtype=torch.float16)
+    l0 = torch.linspace(-1.0, 1.0, 16, dtype=torch.float32)
+    q1 = torch.randint(0, 16, (16, 160), dtype=torch.uint8)
+    s1 = torch.full((16, 5), 0.25, dtype=torch.float16)
+    l1 = torch.linspace(-2.0, 2.0, 16, dtype=torch.float32)
+    p0 = (q0[:, 0::2] | (q0[:, 1::2] << 4)).contiguous()
+    p1 = (q1[:, 0::2] | (q1[:, 1::2] << 4)).contiguous()
+
+    loaded = ngram.load_weights(
+        [
+            ("layer_multipliers", torch.ones(3, dtype=torch.long)),
+            ("ngram_embedding.shard_0.weight_packed", p0),
+            ("ngram_embedding.shard_0.weight_scale", s0),
+            ("ngram_embedding.shard_0.weight_lut", l0),
+            ("ngram_embedding.shard_1.weight_packed", p1),
+            ("ngram_embedding.shard_1.weight_scale", s1),
+            ("ngram_embedding.shard_1.weight_lut", l1),
+        ]
+    )
+    assert "ngram_embedding.weight" in loaded
+    assert "layer_multipliers" in loaded
+
+    ids = torch.tensor([[2, 19]], dtype=torch.long)
+    out = method.embedding(emb, ids)
+    assert out.shape == (1, 2, 160)
+    ref0 = (l0[q0[2].long()].reshape(5, 32) * s0[2].unsqueeze(-1).float()).to(torch.bfloat16).reshape(160)
+    ref1 = (l1[q1[3].long()].reshape(5, 32) * s1[3].unsqueeze(-1).float()).to(torch.bfloat16).reshape(160)
+    torch.testing.assert_close(out[0, 0], ref0)
+    torch.testing.assert_close(out[0, 1], ref1)
+
+    pinned_out = torch.empty((2, 160), dtype=torch.bfloat16)
+    method.lookup_from_pinned(emb, ids.reshape(-1), pinned_out)
+    torch.testing.assert_close(pinned_out[0], ref0)
+    torch.testing.assert_close(pinned_out[1], ref1)
+    assert torch.equal(method.dequantize(emb, pinned_out, torch.bfloat16), pinned_out)
 
 
 def test_stamp_vllm_autoload_normalizes_configs_and_synthesizes_preprocessors(

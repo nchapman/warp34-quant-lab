@@ -123,6 +123,11 @@ class CustomLut4PLEMethod:
     - First `D // 2` bytes: packed 4-bit unsigned LUT indices (low nibble = even col,
       high nibble = odd col).
     - Last `(D // G_eff) * 2` bytes: `D // G_eff` FP16 group scales viewed as `uint8`.
+
+    Supports both:
+    - Legacy shard-parallel vLLM PLE (`forward_SingleShard` + `embedding_dim_per_shard`)
+    - Modern vocab-parallel vLLM PLE (`PLEVocabParallelEmbedding` + `create_weights` /
+      `embedding` / `lookup_from_pinned` / `dequantize(layer, embeddings, output_dtype)`)
     """
 
     def __init__(self, group_size: int = 32) -> None:
@@ -131,6 +136,8 @@ class CustomLut4PLEMethod:
         self.group_size = int(group_size)
         self.luts: dict[int, torch.Tensor] = {}
         self._current_shard_idx: int = 0
+        self._row_lut: torch.Tensor | None = None
+        self._row_lut_device: torch.device | None = None
 
     def effective_group_size(self, embedding_dim_per_shard: int) -> int:
         if embedding_dim_per_shard <= 0 or embedding_dim_per_shard % 2 != 0:
@@ -143,6 +150,10 @@ class CustomLut4PLEMethod:
             )
         return g_eff
 
+    def row_storage_bytes(self, embedding_dim: int) -> int:
+        g_eff = self.effective_group_size(embedding_dim)
+        return (embedding_dim // 2) + (embedding_dim // g_eff) * 2
+
     def get_storage_Spec(
         self,
         num_embeddings: int,
@@ -150,10 +161,42 @@ class CustomLut4PLEMethod:
         params_dtype: torch.dtype,
     ) -> tuple[tuple[int, int], torch.dtype]:
         del params_dtype
-        g_eff = self.effective_group_size(embedding_dim_per_shard)
-        packed_cols = embedding_dim_per_shard // 2
-        scale_bytes = (embedding_dim_per_shard // g_eff) * 2
-        return (num_embeddings, packed_cols + scale_bytes), torch.uint8
+        return (num_embeddings, self.row_storage_bytes(embedding_dim_per_shard)), torch.uint8
+
+    def create_weights(
+        self,
+        layer: torch.nn.Module,
+        input_size_per_partition: int,
+        output_partition_sizes: list[int],
+        input_size: int,
+        output_size: int,
+        params_dtype: torch.dtype,
+        **extra_weight_attrs: Any,
+    ) -> None:
+        del input_size, output_size, params_dtype
+        weight_loader = extra_weight_attrs.get("weight_loader")
+        num_rows = sum(output_partition_sizes)
+        row_bytes = self.row_storage_bytes(input_size_per_partition)
+        alloc_fn = getattr(layer, "allocate_embedding_weight", None)
+        if callable(alloc_fn):
+            data = alloc_fn(num_rows, row_bytes, torch.uint8)
+        else:
+            data = torch.empty(num_rows, row_bytes, dtype=torch.uint8)
+        try:
+            param_mod = importlib.import_module("vllm.model_executor.parameter")
+            ModelWeightParameter = param_mod.ModelWeightParameter
+            weight: torch.nn.Parameter = ModelWeightParameter(
+                data=data,
+                input_dim=1,
+                output_dim=0,
+                weight_loader=weight_loader,
+            )
+        except Exception:
+            weight = torch.nn.Parameter(data, requires_grad=False)
+        layer.register_parameter("weight", weight)
+        layer._warp_quant_row_bytes = row_bytes
+        self._row_lut = torch.zeros((num_rows, 16), dtype=torch.float32)
+        self._row_lut_device = None
 
     def pack_shard_weights(
         self,
@@ -199,33 +242,168 @@ class CustomLut4PLEMethod:
 
         return torch.cat((w_packed, w_scale.view(torch.uint8)), dim=-1)
 
+    def record_vocab_shard_lut(
+        self,
+        layer: torch.nn.Module,
+        shard_idx: int,
+        checkpoint_start: int,
+        checkpoint_rows: int,
+    ) -> None:
+        lut = self.luts.get(shard_idx)
+        if lut is None or self._row_lut is None:
+            return
+        shard_indices = getattr(layer, "shard_indices", None)
+        tp_start = int(getattr(shard_indices, "org_vocab_start_index", 0))
+        tp_end = int(getattr(shard_indices, "org_vocab_end_index", self._row_lut.shape[0]))
+        overlap_start = max(checkpoint_start, tp_start)
+        overlap_end = min(checkpoint_start + checkpoint_rows, tp_end)
+        if overlap_start >= overlap_end:
+            return
+        dst_start = overlap_start - tp_start
+        dst_end = dst_start + (overlap_end - overlap_start)
+        self._row_lut[dst_start:dst_end] = lut.to(device=self._row_lut.device, dtype=torch.float32)
+        self._row_lut_device = None
+
+    def _decode_rows_with_lut(
+        self,
+        raw_rows: torch.Tensor,
+        embedding_dim: int,
+        out_dtype: torch.dtype,
+        row_luts: torch.Tensor,
+        valid_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        g_eff = self.effective_group_size(embedding_dim)
+        packed_cols = embedding_dim // 2
+        num_groups = embedding_dim // g_eff
+        q_packed = raw_rows[..., :packed_cols]
+        scale_bytes = raw_rows[..., packed_cols:].contiguous()
+        scales = (
+            scale_bytes.view(torch.float16).reshape(*raw_rows.shape[:-1], num_groups, 1).to(torch.float32)
+        )
+        lo = (q_packed & 0x0F).to(torch.long)
+        hi = ((q_packed >> 4) & 0x0F).to(torch.long)
+        idx = torch.stack((lo, hi), dim=-1).reshape(*raw_rows.shape[:-1], embedding_dim)
+        if row_luts.ndim == 1:
+            vals = row_luts[idx]
+        else:
+            vals = torch.gather(row_luts, -1, idx)
+        out = (
+            (vals.reshape(*raw_rows.shape[:-1], num_groups, g_eff) * scales)
+            .to(out_dtype)
+            .reshape(*raw_rows.shape[:-1], embedding_dim)
+        )
+        if valid_mask is not None:
+            out = torch.where(valid_mask.unsqueeze(-1), out, torch.zeros_like(out))
+        return out
+
+    def lookup_dtype(self, layer: torch.nn.Module) -> torch.dtype:
+        return getattr(layer, "params_dtype", torch.bfloat16)
+
+    def embedding(self, layer: torch.nn.Module, input_: torch.Tensor) -> torch.Tensor:
+        # Called by VocabParallelEmbedding.forward(masked_input) with local indices
+        embedding_dim = int(getattr(layer, "embedding_dim", 160))
+        out_dtype = getattr(layer, "params_dtype", torch.bfloat16)
+        flat_ids = input_.reshape(-1).long()
+        num_local_rows = layer.weight.shape[0]
+        valid = (flat_ids >= 0) & (flat_ids < num_local_rows)
+        safe_ids = flat_ids.clamp(0, max(0, num_local_rows - 1))
+        raw_rows = torch.nn.functional.embedding(safe_ids, layer.weight)
+        if self._row_lut is not None:
+            if self._row_lut_device != raw_rows.device:
+                self._row_lut = self._row_lut.to(device=raw_rows.device, dtype=torch.float32)
+                self._row_lut_device = raw_rows.device
+            row_luts = self._row_lut.index_select(0, safe_ids)
+        else:
+            lut0 = self.luts.get(0)
+            if lut0 is None:
+                raise RuntimeError("Missing Custom-LUT4 codebook for PLE embedding")
+            row_luts = lut0.to(device=raw_rows.device, dtype=torch.float32)
+        decoded = self._decode_rows_with_lut(raw_rows, embedding_dim, out_dtype, row_luts, valid_mask=valid)
+        return decoded.reshape(*input_.shape, embedding_dim)
+
+    def lookup_from_pinned(
+        self,
+        layer: Any,
+        ids: torch.Tensor,
+        output: torch.Tensor,
+    ) -> None:
+        embedding_dim = int(getattr(layer, "embedding_dim", output.shape[-1]))
+        row_bytes = int(getattr(layer, "_warp_quant_row_bytes", self.row_storage_bytes(embedding_dim)))
+        shard_indices = getattr(layer, "shard_indices", None)
+        vocab_start = int(getattr(shard_indices, "org_vocab_start_index", 0))
+        vocab_end = int(getattr(shard_indices, "org_vocab_end_index", layer.weight.shape[0]))
+        raw_buf = torch.empty((ids.numel(), row_bytes), dtype=torch.uint8, device=output.device)
+        copied = False
+        try:
+            common_ple = importlib.import_module("vllm.models.qwen4_exp.common.ngram_embedding")
+            triton_mod = importlib.import_module("triton")
+            kernel = getattr(common_ple, "_lookup_ple_embedding_from_pinned_kernel", None)
+            uva_weight = getattr(layer, "_uva_weight", None)
+            if kernel is not None and uva_weight is not None:
+                kernel[(ids.numel(),)](
+                    uva_weight,
+                    ids,
+                    raw_buf,
+                    row_bytes,
+                    vocab_start,
+                    vocab_end,
+                    BLOCK_D=triton_mod.next_power_of_2(row_bytes),
+                )
+                copied = True
+        except Exception:
+            copied = False
+
+        valid = (ids >= vocab_start) & (ids < vocab_end)
+        local_ids = torch.where(valid, ids - vocab_start, torch.zeros_like(ids))
+        if not copied:
+            weight_ids = local_ids.to(layer.weight.device)
+            raw_buf.copy_(layer.weight.index_select(0, weight_ids), non_blocking=True)
+
+        out_valid = valid.to(output.device)
+        out_local_ids = local_ids.to(output.device)
+        if self._row_lut is not None:
+            if self._row_lut_device != output.device:
+                self._row_lut = self._row_lut.to(device=output.device, dtype=torch.float32)
+                self._row_lut_device = output.device
+            row_luts = self._row_lut.index_select(0, out_local_ids)
+        else:
+            lut0 = self.luts.get(0)
+            if lut0 is None:
+                raise RuntimeError("Missing Custom-LUT4 codebook for PLE embedding")
+            row_luts = lut0.to(device=output.device, dtype=torch.float32)
+
+        decoded = self._decode_rows_with_lut(
+            raw_buf,
+            embedding_dim,
+            output.dtype,
+            row_luts,
+            valid_mask=out_valid,
+        )
+        output.view(-1, embedding_dim).copy_(decoded)
+
     def dequantize(
         self,
-        rows: torch.Tensor,
-        embedding_dim_per_shard: int,
+        rows_or_layer: Any,
+        dim_or_embeddings: Any,
         out_dtype: torch.dtype,
         shard_idx: int | None = None,
     ) -> torch.Tensor:
+        # Modern vLLM signature: dequantize(self, layer: nn.Module, embeddings: Tensor, output_dtype: dtype)
+        if isinstance(rows_or_layer, torch.nn.Module) and isinstance(dim_or_embeddings, torch.Tensor):
+            return dim_or_embeddings.to(out_dtype)
+
+        # Legacy signature: dequantize(self, rows: Tensor, embedding_dim_per_shard: int, out_dtype: dtype, shard_idx=None)
+        rows = rows_or_layer
+        embedding_dim_per_shard = int(dim_or_embeddings)
         if shard_idx is None:
             shard_idx = self._current_shard_idx
-        g_eff = self.effective_group_size(embedding_dim_per_shard)
-        packed_cols = embedding_dim_per_shard // 2
-        num_groups = embedding_dim_per_shard // g_eff
-        q_packed = rows[..., :packed_cols]
-        scale_bytes = rows[..., packed_cols:].contiguous()
-        scales = scale_bytes.view(torch.float16).reshape(*rows.shape[:-1], num_groups, 1).to(torch.float32)
-
-        lo = (q_packed & 0x0F).to(torch.long)
-        hi = ((q_packed >> 4) & 0x0F).to(torch.long)
-        idx = torch.stack((lo, hi), dim=-1).reshape(*rows.shape[:-1], num_groups, g_eff)
-
         lut = self.luts.get(shard_idx)
         if lut is None:
             raise RuntimeError(f"Missing Custom-LUT4 codebook for PLE shard {shard_idx}")
         if lut.device != rows.device or lut.dtype != torch.float32:
             lut = lut.to(device=rows.device, dtype=torch.float32)
             self.luts[shard_idx] = lut
-        return (lut[idx] * scales).to(out_dtype).reshape(*rows.shape[:-1], embedding_dim_per_shard)
+        return self._decode_rows_with_lut(rows, embedding_dim_per_shard, out_dtype, lut)
 
 
 def _patch_ct_linear_transform() -> None:
@@ -250,6 +428,48 @@ def _patch_ct_linear_transform() -> None:
         HadamardTransform = ht_mod.HadamardTransform
     except Exception:
         return
+
+    # Patch SharedWeightParameter loader methods so replicated block-Hadamard
+    # matrices (whose shape equals loaded_weight.shape across all TP ranks)
+    # do not fail when LinearBase.update_param_tp_status() sets partition.tp_rank = self.tp_rank.
+    try:
+        param_mod_top = importlib.import_module("vllm.model_executor.parameter")
+        SharedWeightParameter = getattr(param_mod_top, "SharedWeightParameter", None)
+        if SharedWeightParameter is not None and not getattr(
+            SharedWeightParameter, "_warp_quant_tp_loader_patched", False
+        ):
+            orig_load_row = getattr(SharedWeightParameter, "load_row_parallel_weight", None)
+            orig_load_col = getattr(SharedWeightParameter, "load_column_parallel_weight", None)
+
+            if orig_load_row is not None:
+
+                def _load_row_parallel_weight(
+                    self: Any, loaded_weight: torch.Tensor, *args: Any, **kwargs: Any
+                ) -> Any:
+                    if hasattr(self, "partitions"):
+                        for p in self.partitions.values():
+                            if getattr(p, "data", p).shape == loaded_weight.shape:
+                                p.tp_rank = 0
+                    return orig_load_row(self, loaded_weight, *args, **kwargs)
+
+                SharedWeightParameter.load_row_parallel_weight = _load_row_parallel_weight
+
+            if orig_load_col is not None:
+
+                def _load_column_parallel_weight(
+                    self: Any, loaded_weight: torch.Tensor, *args: Any, **kwargs: Any
+                ) -> Any:
+                    if hasattr(self, "partitions"):
+                        for p in self.partitions.values():
+                            if getattr(p, "data", p).shape == loaded_weight.shape:
+                                p.tp_rank = 0
+                    return orig_load_col(self, loaded_weight, *args, **kwargs)
+
+                SharedWeightParameter.load_column_parallel_weight = _load_column_parallel_weight
+
+            SharedWeightParameter._warp_quant_tp_loader_patched = True
+    except Exception:
+        pass
 
     if getattr(CompressedTensorsLinearTransformMethod, "_warp_quant_patched", False):
         return
@@ -285,15 +505,48 @@ def _patch_ct_linear_transform() -> None:
     orig_ht_init = HadamardTransform.__init__
     orig_ht_forward = getattr(HadamardTransform, "forward", None)
 
-    if orig_ht_forward is not None:
-
-        def _ht_forward(self: Any, value: torch.Tensor, part_id: int = 0) -> torch.Tensor:
-            # Clone input before HadamardTransform.forward so vLLM's in-place
-            # ops.hadacore_transform(value, inplace=True) does not corrupt shared
-            # caller activations (e.g. GatedDeltaNet in_proj_ba, MoE gates).
+    def _ht_forward(self: Any, value: torch.Tensor, part_id: int = 0) -> torch.Tensor:
+        if part_id not in self.weight.partitions:
+            return value
+        tfm = self.transforms[part_id]
+        if tfm.scheme.type == "hadamard" and tfm.scheme.head_dim is not None:
+            head_dim = int(tfm.scheme.head_dim)
+            tp_size = getattr(self, "_warp_quant_tp_size", 1)
+            tp_rank = getattr(self, "_warp_quant_tp_rank", 0)
+            if tp_size > 1 and value.shape[-1] % head_dim != 0:
+                comm_mod = importlib.import_module("vllm.distributed.communication_op")
+                all_gather = comm_mod.tensor_model_parallel_all_gather
+                rem = value.shape[-1] % head_dim
+                if (
+                    tp_size == 2
+                    and rem * 2 == head_dim
+                    and getattr(self, "_warp_quant_partner_layer", None) is not None
+                ):
+                    if tp_rank == 0:
+                        prefix = value[..., :-rem].contiguous()
+                        boundary_half = value[..., -rem:].contiguous()
+                        boundary = all_gather(boundary_half, dim=-1)
+                        prefix_rot = fast_block_hadamard(prefix, head_dim)
+                        boundary_rot = fast_block_hadamard(boundary, head_dim)
+                        return torch.cat((prefix_rot, boundary_rot[..., :rem]), dim=-1)
+                    suffix = value[..., rem:].contiguous()
+                    boundary_half = value[..., :rem].contiguous()
+                    boundary = all_gather(boundary_half, dim=-1)
+                    suffix_rot = fast_block_hadamard(suffix, head_dim)
+                    boundary_rot = fast_block_hadamard(boundary, head_dim)
+                    return torch.cat((boundary_rot[..., rem:], suffix_rot), dim=-1)
+                full_val = all_gather(value, dim=-1)
+                full_rot = fast_block_hadamard(full_val, head_dim)
+                part_len = value.shape[-1]
+                return full_rot[..., tp_rank * part_len : (tp_rank + 1) * part_len].contiguous()
+        # Clone input before HadamardTransform.forward so vLLM's in-place
+        # ops.hadacore_transform(value, inplace=True) does not corrupt shared
+        # caller activations (e.g. GatedDeltaNet in_proj_ba, MoE gates).
+        if orig_ht_forward is not None:
             return orig_ht_forward(self, value.clone(), part_id=part_id)
+        return value
 
-        HadamardTransform.forward = _ht_forward
+    HadamardTransform.forward = _ht_forward
 
     def _ht_init(
         self: Any,
@@ -308,13 +561,29 @@ def _patch_ct_linear_transform() -> None:
             can_shard_block_hadamard = all(
                 t.scheme.head_dim is not None
                 and t.args.location == TransformLocation.INPUT
-                and input_size_per_partition % int(t.scheme.head_dim) == 0
+                and (
+                    input_size_per_partition % int(t.scheme.head_dim) == 0
+                    or (input_size_per_partition * tp_size) % int(t.scheme.head_dim) == 0
+                )
                 for t in transforms.values()
             )
-            if can_shard_block_hadamard:
+            is_tp_disabled = getattr(layer, "tp_size", tp_size) == 1
+            if can_shard_block_hadamard or is_tp_disabled:
+                param_mod = None
+                try:
+                    param_mod = importlib.import_module("vllm.model_executor.parameter")
+                except Exception:
+                    param_mod = None
                 orig_tp_fn = ht_mod.get_tensor_model_parallel_world_size
+                orig_param_tp_fn = (
+                    getattr(param_mod, "get_tensor_model_parallel_world_size", None)
+                    if param_mod is not None
+                    else None
+                )
                 try:
                     ht_mod.get_tensor_model_parallel_world_size = lambda: 1
+                    if param_mod is not None and orig_param_tp_fn is not None:
+                        param_mod.get_tensor_model_parallel_world_size = lambda: 1
                     orig_ht_init(
                         self,
                         transforms,
@@ -325,6 +594,17 @@ def _patch_ct_linear_transform() -> None:
                     )
                 finally:
                     ht_mod.get_tensor_model_parallel_world_size = orig_tp_fn
+                    if param_mod is not None and orig_param_tp_fn is not None:
+                        param_mod.get_tensor_model_parallel_world_size = orig_param_tp_fn
+                self._warp_quant_tp_size = int(getattr(layer, "tp_size", tp_size))
+                self._warp_quant_tp_rank = int(getattr(layer, "tp_rank", 0))
+                self._warp_quant_partner_layer = True
+                if is_tp_disabled and hasattr(self, "weight") and hasattr(self.weight, "partitions"):
+                    for p in self.weight.partitions.values():
+                        if hasattr(p, "tp_rank"):
+                            p.tp_rank = 0
+                        if hasattr(p, "tp_size"):
+                            p.tp_size = 1
                 return
         orig_ht_init(
             self,
@@ -987,100 +1267,181 @@ def _patch_qwen4_exp_ple_lut4() -> None:
 
     orig_from_quant_config = Qwen4ExpPLEEmbeddingMethod.from_quant_config
 
-    @classmethod
     def _from_quant_config(
-        cls: Any,
         quant_config: Any,
-        hf_text_config: Any = None,
+        *args: Any,
+        **kwargs: Any,
     ) -> Qwen4ExpPLEEmbeddingMethod:
+        hf_text_config = args[0] if args and not isinstance(args[0], str) else kwargs.get("hf_text_config")
         ple_cfg = getattr(hf_text_config, "ple_quantization", None) or getattr(
             quant_config, "ple_quantization", None
         )
+        if not isinstance(ple_cfg, dict):
+            raw_cfg = getattr(quant_config, "config", None)
+            if isinstance(raw_cfg, dict):
+                ple_cfg = raw_cfg.get("ple_quantization")
+        if not isinstance(ple_cfg, dict):
+            try:
+                cfg_mod = importlib.import_module("vllm.config")
+                vllm_cfg = cfg_mod.get_current_vllm_config()
+                hf_cfg = getattr(getattr(vllm_cfg, "model_config", None), "hf_config", None)
+                hf_text = getattr(hf_cfg, "get_text_config", lambda: hf_cfg)()
+                ple_cfg = getattr(hf_text, "ple_quantization", None) or getattr(
+                    hf_cfg, "ple_quantization", None
+                )
+            except Exception:
+                ple_cfg = None
         if isinstance(ple_cfg, dict) and ple_cfg.get("format") in (
             "custom_lut4_g32_fp16scale",
             "lut4-gptq",
         ):
             return Qwen4ExpPLECustomLut4EmbeddingMethod(group_size=int(ple_cfg.get("group_size", 32)))
-        return orig_from_quant_config(quant_config, hf_text_config)
+        return orig_from_quant_config(quant_config, *args, **kwargs)
 
-    Qwen4ExpPLEEmbeddingMethod.from_quant_config = _from_quant_config
+    Qwen4ExpPLEEmbeddingMethod.from_quant_config = staticmethod(_from_quant_config)
 
-    # Patch dequantize call sites on Device & PinnedHost PLE embeddings to pass shard_idx when needed
-    orig_device_forward = common_ple.Qwen4ExpPLEDeviceEmbedding.forward_SingleShard
-    orig_pinned_forward = common_ple.Qwen4ExpPLEPinnedHostEmbedding.forward_SingleShard
-    orig_gather_uva = common_ple.Qwen4ExpPLEPinnedHostEmbedding._gather_rows_uva
+    # Legacy shard-parallel vLLM PLE hooks (present before PLEVocabParallelEmbedding refactor)
+    device_cls = getattr(common_ple, "Qwen4ExpPLEDeviceEmbedding", None)
+    pinned_cls = getattr(common_ple, "Qwen4ExpPLEPinnedHostEmbedding", None)
+    orig_device_forward = getattr(device_cls, "forward_SingleShard", None)
+    orig_pinned_forward = getattr(pinned_cls, "forward_SingleShard", None)
+    orig_gather_uva = getattr(pinned_cls, "_gather_rows_uva", None)
 
-    def _gather_rows_uva(self: Any, shard_idx: int, flat_ids: torch.Tensor) -> torch.Tensor:
-        if isinstance(self.quant_method, Qwen4ExpPLECustomLut4EmbeddingMethod):
-            self.quant_method._current_shard_idx = shard_idx
-        return orig_gather_uva(self, shard_idx, flat_ids)
+    if orig_gather_uva is not None:
 
-    common_ple.Qwen4ExpPLEPinnedHostEmbedding._gather_rows_uva = _gather_rows_uva
+        def _gather_rows_uva(self: Any, shard_idx: int, flat_ids: torch.Tensor) -> torch.Tensor:
+            if isinstance(self.quant_method, Qwen4ExpPLECustomLut4EmbeddingMethod):
+                self.quant_method._current_shard_idx = shard_idx
+            return orig_gather_uva(self, shard_idx, flat_ids)
 
-    def _device_forward_single_shard(
-        self: Any, shard_idx: int, flat_ids: torch.Tensor, valid_mask: torch.Tensor
-    ) -> torch.Tensor:
-        if isinstance(self.quant_method, Qwen4ExpPLECustomLut4EmbeddingMethod):
-            rows = self.weights[shard_idx].index_select(0, flat_ids)
-            out = self.quant_method.dequantize(
-                rows,
-                self.embedding_dim_per_shard,
-                self.params_dtype,
-                shard_idx=shard_idx,
-            )
-            return out * valid_mask.unsqueeze(-1).to(out.dtype)
-        return orig_device_forward(self, shard_idx, flat_ids, valid_mask)
+        common_ple.Qwen4ExpPLEPinnedHostEmbedding._gather_rows_uva = _gather_rows_uva
 
-    def _pinned_forward_single_shard(
-        self: Any, shard_idx: int, flat_ids: torch.Tensor, valid_mask: torch.Tensor
-    ) -> torch.Tensor:
-        if isinstance(self.quant_method, Qwen4ExpPLECustomLut4EmbeddingMethod):
-            if self._prefetched_out is not None:
-                return self._prefetched_out[shard_idx]
-            rows = self._gather_rows_uva(shard_idx, flat_ids)
-            out = self.quant_method.dequantize(
-                rows,
-                self.embedding_dim_per_shard,
-                self.params_dtype,
-                shard_idx=shard_idx,
-            )
-            return out * valid_mask.unsqueeze(-1).to(out.dtype)
-        return orig_pinned_forward(self, shard_idx, flat_ids, valid_mask)
+    if orig_device_forward is not None:
 
-    common_ple.Qwen4ExpPLEDeviceEmbedding.forward_SingleShard = _device_forward_single_shard
-    common_ple.Qwen4ExpPLEPinnedHostEmbedding.forward_SingleShard = _pinned_forward_single_shard
+        def _device_forward_single_shard(
+            self: Any, shard_idx: int, flat_ids: torch.Tensor, valid_mask: torch.Tensor
+        ) -> torch.Tensor:
+            if isinstance(self.quant_method, Qwen4ExpPLECustomLut4EmbeddingMethod):
+                rows = self.weights[shard_idx].index_select(0, flat_ids)
+                out = self.quant_method.dequantize(
+                    rows,
+                    self.embedding_dim_per_shard,
+                    self.params_dtype,
+                    shard_idx=shard_idx,
+                )
+                return out * valid_mask.unsqueeze(-1).to(out.dtype)
+            return orig_device_forward(self, shard_idx, flat_ids, valid_mask)
+
+        common_ple.Qwen4ExpPLEDeviceEmbedding.forward_SingleShard = _device_forward_single_shard
+
+    if orig_pinned_forward is not None:
+
+        def _pinned_forward_single_shard(
+            self: Any, shard_idx: int, flat_ids: torch.Tensor, valid_mask: torch.Tensor
+        ) -> torch.Tensor:
+            if isinstance(self.quant_method, Qwen4ExpPLECustomLut4EmbeddingMethod):
+                if self._prefetched_out is not None:
+                    return self._prefetched_out[shard_idx]
+                rows = self._gather_rows_uva(shard_idx, flat_ids)
+                out = self.quant_method.dequantize(
+                    rows,
+                    self.embedding_dim_per_shard,
+                    self.params_dtype,
+                    shard_idx=shard_idx,
+                )
+                return out * valid_mask.unsqueeze(-1).to(out.dtype)
+            return orig_pinned_forward(self, shard_idx, flat_ids, valid_mask)
+
+        common_ple.Qwen4ExpPLEPinnedHostEmbedding.forward_SingleShard = _pinned_forward_single_shard
 
     orig_load_weights = Qwen4ExpNGramEmbedding.load_weights
 
     def _load_weights(self: Any, weights: Any) -> set[str]:
-        quant_method = getattr(self.backend, "quant_method", None)
+        # Legacy backend attribute (`self.backend`) vs modern (`self.ngram_embedding`)
+        backend = getattr(self, "backend", None)
+        embedding = getattr(self, "ngram_embedding", None)
+        quant_method = (
+            getattr(backend, "quant_method", None)
+            or getattr(embedding, "embedding_method", None)
+            or getattr(embedding, "quant_method", None)
+        )
         if not isinstance(quant_method, Qwen4ExpPLECustomLut4EmbeddingMethod):
             return orig_load_weights(self, weights)
 
-        loaded: set[str] = set()
-        pending: dict[int, dict[str, torch.Tensor]] = {}
-        for name, tensor in weights:
-            for shard_idx in range(self.num_shards):
-                prefix = f"shard_{shard_idx}."
-                if name.startswith(prefix):
-                    suffix = name[len(prefix) :]
-                    pending.setdefault(shard_idx, {})[suffix] = tensor
-                    loaded.add(name)
-                    break
+        if backend is not None and hasattr(self, "num_shards"):
+            loaded: set[str] = set()
+            pending: dict[int, dict[str, torch.Tensor]] = {}
+            for name, tensor in weights:
+                for shard_idx in range(self.num_shards):
+                    prefix = f"shard_{shard_idx}."
+                    if name.startswith(prefix):
+                        suffix = name[len(prefix) :]
+                        pending.setdefault(shard_idx, {})[suffix] = tensor
+                        loaded.add(name)
+                        break
 
-        packed_by_shard: dict[int, torch.Tensor] = {}
-        for shard_idx, parts in pending.items():
-            packed_by_shard[shard_idx] = quant_method.pack_shard_weights(
+            packed_by_shard: dict[int, torch.Tensor] = {}
+            for shard_idx, parts in pending.items():
+                packed_by_shard[shard_idx] = quant_method.pack_shard_weights(
+                    shard_idx=shard_idx,
+                    parts=parts,
+                    embedding_dim_per_shard=self.embedding_dim_per_shard,
+                    tp_size=getattr(self, "tp_size", 1),
+                    tp_rank=getattr(self, "tp_rank", 0),
+                )
+            for shard_idx, combined_row_bytes in packed_by_shard.items():
+                backend.load_shard_weight(shard_idx, combined_row_bytes)
+
+            return loaded
+
+        # Modern PLEVocabParallelEmbedding path (`ngram_embedding.shard_<i>.{weight_packed,weight_scale,weight_lut}`)
+        assert embedding is not None
+        loaded_modern: set[str] = set()
+        pending_modern: dict[int, dict[str, torch.Tensor]] = {}
+        passthrough: list[tuple[str, torch.Tensor]] = []
+        lut4_suffixes = {"weight_packed", "weight_scale", "weight_lut", "weight_shape"}
+
+        for name, tensor in weights:
+            matched_shard = False
+            for pfx in ("ngram_embedding.shard_", "shard_"):
+                if name.startswith(pfx):
+                    shard_text, _, suffix = name[len(pfx) :].partition(".")
+                    if shard_text.isdigit() and suffix in lut4_suffixes:
+                        pending_modern.setdefault(int(shard_text), {})[suffix] = tensor
+                        loaded_modern.add("ngram_embedding.weight" if pfx.startswith("ngram_") else name)
+                        matched_shard = True
+                        break
+            if not matched_shard:
+                passthrough.append((name, tensor))
+
+        if passthrough:
+            loaded_modern.update(orig_load_weights(self, passthrough))
+
+        split_parts = int(getattr(self, "split_ngram_parts", max(1, len(pending_modern))))
+        org_vocab_size = int(getattr(embedding, "org_vocab_size", embedding.weight.shape[0]))
+        shard_size = (org_vocab_size + split_parts - 1) // split_parts
+        head_dim = int(getattr(self, "head_dim", getattr(embedding, "embedding_dim", 160)))
+        param = embedding.weight
+
+        for shard_idx, parts in sorted(pending_modern.items()):
+            combined = quant_method.pack_shard_weights(
                 shard_idx=shard_idx,
                 parts=parts,
-                embedding_dim_per_shard=self.embedding_dim_per_shard,
-                tp_size=getattr(self, "tp_size", 1),
-                tp_rank=getattr(self, "tp_rank", 0),
+                embedding_dim_per_shard=head_dim,
             )
-        for shard_idx, combined_row_bytes in packed_by_shard.items():
-            self.backend.load_shard_weight(shard_idx, combined_row_bytes)
+            checkpoint_start = shard_idx * shard_size
+            quant_method.record_vocab_shard_lut(
+                embedding,
+                shard_idx=shard_idx,
+                checkpoint_start=checkpoint_start,
+                checkpoint_rows=combined.shape[0],
+            )
+            if hasattr(param, "weight_loader"):
+                param.weight_loader(param, combined, checkpoint_start=checkpoint_start)
+            elif hasattr(embedding, "weight_loader"):
+                embedding.weight_loader(param, combined, checkpoint_start=checkpoint_start)
 
-        return loaded
+        return loaded_modern
 
     Qwen4ExpNGramEmbedding.load_weights = _load_weights
     nvidia_ple.Qwen4ExpPLECustomLut4EmbeddingMethod = Qwen4ExpPLECustomLut4EmbeddingMethod
