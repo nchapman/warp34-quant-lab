@@ -195,10 +195,10 @@ def list_model_safetensors(model_dir: Path) -> list[Path]:
         paths: list[Path] = []
         for name in names:
             rel = Path(name)
-            if rel.is_absolute() or ".." in rel.parts:
+            if rel.is_absolute() or ".." in rel.parts or rel.suffix != ".safetensors":
                 raise ValueError(f"Unsafe shard path in {idx_path}: {name!r}")
             candidate = model_dir / rel
-            if not candidate.resolve().is_relative_to(root):
+            if not candidate.parent.resolve().is_relative_to(root):
                 raise ValueError(f"Indexed shard escapes model_dir in {idx_path}: {name!r}")
             paths.append(candidate)
         missing = [str(p) for p in paths if not p.is_file()]

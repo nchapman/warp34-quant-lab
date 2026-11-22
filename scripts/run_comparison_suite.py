@@ -403,14 +403,20 @@ from evalscope.api.mixin.code_execution_sandbox_mixin import CodeExecutionSandbo
 
 def _apply_rlimits():
     resource.setrlimit(resource.RLIMIT_CPU, (60, 60))
-    resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
+    resource.setrlimit(resource.RLIMIT_AS, (4 * 1024**3, 4 * 1024**3))
     resource.setrlimit(resource.RLIMIT_FSIZE, (32 * 1024**2, 32 * 1024**2))
-    resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+    resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
 
 def _local_subprocess_exec(self, code, timeout=30, language="python"):
     try:
         eff_t = max(15, min(60, int(timeout or 30)))
-        clean_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONNOUSERSITE": "1"}
+        clean_env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "PYTHONNOUSERSITE": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+            "MKL_NUM_THREADS": "1",
+        }
         with tempfile.TemporaryDirectory(prefix="es_code_") as tmpdir:
             r = subprocess.run(
                 [sys.executable, "-I", "-"],

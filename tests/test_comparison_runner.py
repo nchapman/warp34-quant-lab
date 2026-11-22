@@ -86,11 +86,25 @@ class ComparisonRunnerTests(unittest.TestCase):
             found_idx = list_model_safetensors(d)
             self.assertEqual([p.name for p in found_idx], ["model-00001-of-00001.safetensors"])
 
-            # Path traversal and absolute paths in index files are rejected
-            for bad in ("../escape.safetensors", "/etc/passwd"):
+            # Path traversal, absolute paths, and non-safetensors targets are rejected
+            for bad in ("../escape.safetensors", "/etc/passwd", "not_a_shard.json"):
                 (d / "model.safetensors.index.json").write_text(json.dumps({"weight_map": {"a": bad}}))
                 with self.assertRaises(ValueError):
                     list_model_safetensors(d)
+
+            # Hugging Face Hub snapshot symlink layout (snapshots/<sha>/shard -> hub blobs) is accepted
+            blobs = d / "hub_blobs"
+            blobs.mkdir()
+            blob_file = blobs / "deadbeef"
+            save_file({"a": torch.zeros(4, dtype=torch.bfloat16)}, str(blob_file))
+            snap = d / "models--org--repo" / "snapshots" / "abc123"
+            snap.mkdir(parents=True)
+            (snap / "model-00001-of-00001.safetensors").symlink_to(blob_file)
+            (snap / "model.safetensors.index.json").write_text(
+                json.dumps({"weight_map": {"a": "model-00001-of-00001.safetensors"}})
+            )
+            found_hf = list_model_safetensors(snap)
+            self.assertEqual([p.name for p in found_hf], ["model-00001-of-00001.safetensors"])
 
     def test_safetensors_byte_budget_separates_text_backbone_from_vision_and_mtp(self):
         with tempfile.TemporaryDirectory() as tmp:
