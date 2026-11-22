@@ -1,0 +1,1762 @@
+{
+  "model_key": "27b",
+  "base_model": {
+    "repo": "Qwen/Qwen3.8-27B",
+    "sha": "37561816e66b5b9153b1b64c10968c18c1e6f4a0",
+    "n_layers": 64,
+    "trunk_params": 24353201664
+  },
+  "generated_at_utc": "2026-11-22T21:48:35.863348+00:00",
+  "probe_dtype": "bfloat16",
+  "arms": {
+    "bf16": {
+      "spec": {
+        "arm_id": "bf16",
+        "label": "Qwen/Qwen3.8-27B",
+        "family": "bf16",
+        "tier": "bf16",
+        "format_label": "BF16 (Teacher)",
+        "repo": "Qwen/Qwen3.8-27B",
+        "revision": "main",
+        "gguf_filename": null
+      },
+      "sha": "37561816e66b5b9153b1b64c10968c18c1e6f4a0",
+      "byte_budget": {
+        "trunk_params": 24353201664,
+        "trunk_bytes": 48706403328,
+        "trunk_gib": 45.361,
+        "trunk_bpw": 16.0,
+        "embed_bytes": 2542796800,
+        "embed_gib": 2.368,
+        "head_bytes": 2542796800,
+        "head_gib": 2.368,
+        "text_total_bytes": 53791996928,
+        "text_total_gib": 50.098,
+        "vision_bytes": 921460192,
+        "vision_gib": 0.858,
+        "mtp_bytes": 849398784,
+        "mtp_gib": 0.791,
+        "other_bytes": 0,
+        "total_file_bytes": 55562855904,
+        "total_file_gib": 51.747
+      },
+      "exl3_verification": null
+    },
+    "w4_hgptq": {
+      "spec": {
+        "arm_id": "w4_hgptq",
+        "label": "nchapman/Qwen3.8-27B-W4A16-HGPTQ",
+        "family": "warp_quant",
+        "tier": "4bit",
+        "format_label": "W4_g64 + H64 + H-CD + QAT",
+        "repo": "nchapman/Qwen3.8-27B-W4A16-HGPTQ",
+        "revision": "main",
+        "gguf_filename": null
+      },
+      "sha": "9ecfad02750a3a34abc67da1e2de564464a6a0f5",
+      "byte_budget": {
+        "trunk_params": 24353201664,
+        "trunk_bytes": 12976182528,
+        "trunk_gib": 12.085,
+        "trunk_bpw": 4.263,
+        "embed_bytes": 2542796800,
+        "embed_gib": 2.368,
+        "head_bytes": 1311129616,
+        "head_gib": 1.221,
+        "text_total_bytes": 16830108944,
+        "text_total_gib": 15.674,
+        "vision_bytes": 247741824,
+        "vision_gib": 0.231,
+        "mtp_bytes": 251874432,
+        "mtp_gib": 0.235,
+        "other_bytes": 0,
+        "total_file_bytes": 17329725200,
+        "total_file_gib": 16.14
+      },
+      "exl3_verification": null
+    },
+    "exl3_4bpw": {
+      "spec": {
+        "arm_id": "exl3_4bpw",
+        "label": "turboderp/Qwen3.8-27B-exl3@SCP_4.00bpw",
+        "family": "exl3",
+        "tier": "4bit",
+        "format_label": "EXL3 v1.6.7 SCP 4.00bpw (YAQA + frac-K)",
+        "repo": "turboderp/Qwen3.8-27B-exl3",
+        "revision": "SCP_4.00bpw",
+        "gguf_filename": null
+      },
+      "sha": "387b844556856493893ed14f72bca8b2aee5b8b4",
+      "byte_budget": {
+        "trunk_params": 24353201664,
+        "trunk_bytes": 12229231168,
+        "trunk_gib": 11.389,
+        "trunk_bpw": 4.017,
+        "embed_bytes": 2542796800,
+        "embed_gib": 2.368,
+        "head_bytes": 795130884,
+        "head_gib": 0.741,
+        "text_total_bytes": 15567158852,
+        "text_total_gib": 14.498,
+        "vision_bytes": 570139024,
+        "vision_gib": 0.531,
+        "mtp_bytes": 212636704,
+        "mtp_gib": 0.198,
+        "other_bytes": 0,
+        "total_file_bytes": 16349934580,
+        "total_file_gib": 15.227
+      },
+      "exl3_verification": {
+        "checked_layer": "model.language_model.layers.0.linear_attn.in_proj_qkv",
+        "shape": [
+          10240,
+          5120
+        ],
+        "bitrate_K": 4,
+        "cosine_similarity": 0.9999998,
+        "max_abs_diff_fp16": 0.001465
+      }
+    },
+    "gguf_q4_k_xl": {
+      "spec": {
+        "arm_id": "gguf_q4_k_xl",
+        "label": "unsloth/Qwen3.8-27B-GGUF (UD-Q4_K_XL)",
+        "family": "unsloth_gguf",
+        "tier": "4bit",
+        "format_label": "Unsloth Dynamic V3.1 UD-Q4_K_XL",
+        "repo": "unsloth/Qwen3.8-27B-GGUF",
+        "revision": "main",
+        "gguf_filename": "Qwen3.8-27B-UD-Q4_K_XL.gguf"
+      },
+      "sha": "4af51b3542f775b0a8e4b310bfb3f17e01c306c9",
+      "byte_budget": {
+        "trunk_params": 24353201664,
+        "trunk_bytes": 15539296256,
+        "trunk_gib": 14.472,
+        "trunk_bpw": 5.105,
+        "embed_bytes": 715161600,
+        "embed_gib": 0.666,
+        "head_bytes": 1042944000,
+        "head_gib": 0.971,
+        "text_total_bytes": 17297401856,
+        "text_total_gib": 16.109,
+        "vision_bytes": 0,
+        "vision_gib": 0.0,
+        "mtp_bytes": 351008768,
+        "mtp_gib": 0.327,
+        "other_bytes": 0,
+        "total_file_bytes": 17648410624,
+        "total_file_gib": 16.436
+      },
+      "exl3_verification": null
+    },
+    "w26_rco": {
+      "spec": {
+        "arm_id": "w26_rco",
+        "label": "nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO",
+        "family": "warp_quant",
+        "tier": "lowbit",
+        "format_label": "W2/W4 HGPTQ-RCO (30% W4)",
+        "repo": "nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO",
+        "revision": "main",
+        "gguf_filename": null
+      },
+      "sha": "c663b36cee2ffe836e78823681dd34a15e556d77",
+      "byte_budget": {
+        "trunk_params": 24353201664,
+        "trunk_bytes": 8718963968,
+        "trunk_gib": 8.12,
+        "trunk_bpw": 2.864,
+        "embed_bytes": 2542796800,
+        "embed_gib": 2.368,
+        "head_bytes": 1311129616,
+        "head_gib": 1.221,
+        "text_total_bytes": 12572890384,
+        "text_total_gib": 11.709,
+        "vision_bytes": 247741824,
+        "vision_gib": 0.231,
+        "mtp_bytes": 251874432,
+        "mtp_gib": 0.235,
+        "other_bytes": 0,
+        "total_file_bytes": 13072506640,
+        "total_file_gib": 12.175
+      },
+      "exl3_verification": null
+    },
+    "exl3_3bpw": {
+      "spec": {
+        "arm_id": "exl3_3bpw",
+        "label": "turboderp/Qwen3.8-27B-exl3@SCP_3.00bpw",
+        "family": "exl3",
+        "tier": "lowbit",
+        "format_label": "EXL3 v1.6.7 SCP 3.00bpw (YAQA + frac-K)",
+        "repo": "turboderp/Qwen3.8-27B-exl3",
+        "revision": "SCP_3.00bpw",
+        "gguf_filename": null
+      },
+      "sha": "550c12cf3cad8d787c70ec7db38a5682fee8c886",
+      "byte_budget": {
+        "trunk_params": 24353201664,
+        "trunk_bytes": 9188688448,
+        "trunk_gib": 8.558,
+        "trunk_bpw": 3.018,
+        "embed_bytes": 2542796800,
+        "embed_gib": 2.368,
+        "head_bytes": 636206084,
+        "head_gib": 0.593,
+        "text_total_bytes": 12367691332,
+        "text_total_gib": 11.518,
+        "vision_bytes": 570139024,
+        "vision_gib": 0.531,
+        "mtp_bytes": 212636704,
+        "mtp_gib": 0.198,
+        "other_bytes": 0,
+        "total_file_bytes": 13150467060,
+        "total_file_gib": 12.247
+      },
+      "exl3_verification": {
+        "checked_layer": "model.language_model.layers.0.linear_attn.in_proj_qkv",
+        "shape": [
+          10240,
+          5120
+        ],
+        "bitrate_K": 3,
+        "cosine_similarity": 0.9999998,
+        "max_abs_diff_fp16": 0.000977
+      }
+    },
+    "gguf_q2_k_xl": {
+      "spec": {
+        "arm_id": "gguf_q2_k_xl",
+        "label": "unsloth/Qwen3.8-27B-GGUF (UD-Q2_K_XL)",
+        "family": "unsloth_gguf",
+        "tier": "lowbit",
+        "format_label": "Unsloth Dynamic V3.1 UD-Q2_K_XL",
+        "repo": "unsloth/Qwen3.8-27B-GGUF",
+        "revision": "main",
+        "gguf_filename": "Qwen3.8-27B-UD-Q2_K_XL.gguf"
+      },
+      "sha": "4af51b3542f775b0a8e4b310bfb3f17e01c306c9",
+      "byte_budget": {
+        "trunk_params": 24353201664,
+        "trunk_bytes": 8454322176,
+        "trunk_gib": 7.874,
+        "trunk_bpw": 2.777,
+        "embed_bytes": 417177600,
+        "embed_gib": 0.389,
+        "head_bytes": 715161600,
+        "head_gib": 0.666,
+        "text_total_bytes": 9586661376,
+        "text_total_gib": 8.928,
+        "vision_bytes": 0,
+        "vision_gib": 0.0,
+        "mtp_bytes": 351008768,
+        "mtp_gib": 0.327,
+        "other_bytes": 0,
+        "total_file_bytes": 9937670144,
+        "total_file_gib": 9.255
+      },
+      "exl3_verification": null
+    }
+  },
+  "probes": {
+    "w4_hgptq": {
+      "probe-v4": {
+        "eval_set": "probe-v4.jsonl",
+        "rows": 378,
+        "tokens": 852269,
+        "ppl_base": 8.5332,
+        "ppl_quant": 8.1841,
+        "ppl_delta_pct": -4.091,
+        "mean_kl": 0.258263,
+        "weighted_kl": 0.100223,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 23.3572,
+        "elapsed_s": 139.3,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 2566,
+            "mean_kl": 0.053405,
+            "ppl_base": 139.4335,
+            "ppl_quant": 129.7317
+          },
+          "belebele_deu_Latn": {
+            "tokens": 2699,
+            "mean_kl": 0.068874,
+            "ppl_base": 119.692,
+            "ppl_quant": 109.3444
+          },
+          "belebele_fra_Latn": {
+            "tokens": 2572,
+            "mean_kl": 0.081331,
+            "ppl_base": 134.628,
+            "ppl_quant": 113.0216
+          },
+          "belebele_hin_Deva": {
+            "tokens": 3652,
+            "mean_kl": 0.067642,
+            "ppl_base": 45.5772,
+            "ppl_quant": 42.7622
+          },
+          "belebele_ita_Latn": {
+            "tokens": 2761,
+            "mean_kl": 0.056169,
+            "ppl_base": 120.7844,
+            "ppl_quant": 108.2409
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 2350,
+            "mean_kl": 0.064311,
+            "ppl_base": 163.5761,
+            "ppl_quant": 148.5068
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 2739,
+            "mean_kl": 0.066409,
+            "ppl_base": 139.8915,
+            "ppl_quant": 127.4309
+          },
+          "belebele_spa_Latn": {
+            "tokens": 2725,
+            "mean_kl": 0.065088,
+            "ppl_base": 124.6017,
+            "ppl_quant": 108.1183
+          },
+          "belebele_zho_Hans": {
+            "tokens": 2177,
+            "mean_kl": 0.041865,
+            "ppl_base": 404.5101,
+            "ppl_quant": 346.8688
+          },
+          "chat": {
+            "tokens": 220943,
+            "mean_kl": 0.022294,
+            "ppl_base": 4.2233,
+            "ppl_quant": 4.2085
+          },
+          "conversational_agent": {
+            "tokens": 73240,
+            "mean_kl": 1.690239,
+            "ppl_base": 6194.1829,
+            "ppl_quant": 4452.9873
+          },
+          "instruction_following": {
+            "tokens": 41479,
+            "mean_kl": 0.035424,
+            "ppl_base": 7.8094,
+            "ppl_quant": 7.6892
+          },
+          "math": {
+            "tokens": 303481,
+            "mean_kl": 0.071791,
+            "ppl_base": 3.0843,
+            "ppl_quant": 3.0408
+          },
+          "science": {
+            "tokens": 66035,
+            "mean_kl": 0.060677,
+            "ppl_base": 5.5573,
+            "ppl_quant": 5.3642
+          },
+          "swe": {
+            "tokens": 65520,
+            "mean_kl": 0.707458,
+            "ppl_base": 4.2936,
+            "ppl_quant": 4.3045
+          },
+          "terminal_agent": {
+            "tokens": 57330,
+            "mean_kl": 0.283253,
+            "ppl_base": 7.6369,
+            "ppl_quant": 7.5162
+          }
+        }
+      },
+      "probe-guard": {
+        "eval_set": "probe-guard.jsonl",
+        "rows": 76,
+        "tokens": 22746,
+        "ppl_base": 61.0805,
+        "ppl_quant": 56.6664,
+        "ppl_delta_pct": -7.227,
+        "mean_kl": 0.052982,
+        "weighted_kl": 0.073907,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 7.1944,
+        "elapsed_s": 14.2,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 988,
+            "mean_kl": 0.04376,
+            "ppl_base": 196.3369,
+            "ppl_quant": 177.616
+          },
+          "belebele_deu_Latn": {
+            "tokens": 1065,
+            "mean_kl": 0.064967,
+            "ppl_base": 112.0449,
+            "ppl_quant": 107.4869
+          },
+          "belebele_fra_Latn": {
+            "tokens": 1153,
+            "mean_kl": 0.087202,
+            "ppl_base": 117.8634,
+            "ppl_quant": 100.0416
+          },
+          "belebele_hin_Deva": {
+            "tokens": 1682,
+            "mean_kl": 0.079076,
+            "ppl_base": 61.9491,
+            "ppl_quant": 56.3247
+          },
+          "belebele_ita_Latn": {
+            "tokens": 981,
+            "mean_kl": 0.078863,
+            "ppl_base": 128.2332,
+            "ppl_quant": 111.8968
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 885,
+            "mean_kl": 0.100789,
+            "ppl_base": 148.464,
+            "ppl_quant": 131.9143
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 1135,
+            "mean_kl": 0.071471,
+            "ppl_base": 128.6847,
+            "ppl_quant": 118.1212
+          },
+          "belebele_spa_Latn": {
+            "tokens": 956,
+            "mean_kl": 0.071495,
+            "ppl_base": 151.1492,
+            "ppl_quant": 127.7898
+          },
+          "belebele_zho_Hans": {
+            "tokens": 839,
+            "mean_kl": 0.067543,
+            "ppl_base": 552.7534,
+            "ppl_quant": 489.3757
+          },
+          "no_robots": {
+            "tokens": 13062,
+            "mean_kl": 0.037242,
+            "ppl_base": 33.9924,
+            "ppl_quant": 32.4273
+          }
+        }
+      }
+    },
+    "exl3_4bpw": {
+      "probe-v4": {
+        "eval_set": "probe-v4.jsonl",
+        "rows": 378,
+        "tokens": 852269,
+        "ppl_base": 8.5332,
+        "ppl_quant": 8.6143,
+        "ppl_delta_pct": 0.95,
+        "mean_kl": 0.248576,
+        "weighted_kl": 0.092909,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 23.977,
+        "elapsed_s": 109.03,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 2566,
+            "mean_kl": 0.043452,
+            "ppl_base": 139.4335,
+            "ppl_quant": 134.5014
+          },
+          "belebele_deu_Latn": {
+            "tokens": 2699,
+            "mean_kl": 0.038298,
+            "ppl_base": 119.692,
+            "ppl_quant": 114.3473
+          },
+          "belebele_fra_Latn": {
+            "tokens": 2572,
+            "mean_kl": 0.083049,
+            "ppl_base": 134.628,
+            "ppl_quant": 130.4426
+          },
+          "belebele_hin_Deva": {
+            "tokens": 3652,
+            "mean_kl": 0.038616,
+            "ppl_base": 45.5772,
+            "ppl_quant": 46.9217
+          },
+          "belebele_ita_Latn": {
+            "tokens": 2761,
+            "mean_kl": 0.045606,
+            "ppl_base": 120.7844,
+            "ppl_quant": 123.8988
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 2350,
+            "mean_kl": 0.041975,
+            "ppl_base": 163.5761,
+            "ppl_quant": 163.9471
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 2739,
+            "mean_kl": 0.039453,
+            "ppl_base": 139.8915,
+            "ppl_quant": 140.7878
+          },
+          "belebele_spa_Latn": {
+            "tokens": 2725,
+            "mean_kl": 0.04076,
+            "ppl_base": 124.6017,
+            "ppl_quant": 126.7819
+          },
+          "belebele_zho_Hans": {
+            "tokens": 2177,
+            "mean_kl": 0.039891,
+            "ppl_base": 404.5101,
+            "ppl_quant": 411.9979
+          },
+          "chat": {
+            "tokens": 220943,
+            "mean_kl": 0.015741,
+            "ppl_base": 4.2233,
+            "ppl_quant": 4.2141
+          },
+          "conversational_agent": {
+            "tokens": 73240,
+            "mean_kl": 1.699733,
+            "ppl_base": 6194.1829,
+            "ppl_quant": 6797.3666
+          },
+          "instruction_following": {
+            "tokens": 41479,
+            "mean_kl": 0.028929,
+            "ppl_base": 7.8094,
+            "ppl_quant": 7.6786
+          },
+          "math": {
+            "tokens": 303481,
+            "mean_kl": 0.062778,
+            "ppl_base": 3.0843,
+            "ppl_quant": 3.0615
+          },
+          "science": {
+            "tokens": 66035,
+            "mean_kl": 0.055838,
+            "ppl_base": 5.5573,
+            "ppl_quant": 5.4006
+          },
+          "swe": {
+            "tokens": 65520,
+            "mean_kl": 0.638805,
+            "ppl_base": 4.2936,
+            "ppl_quant": 4.6369
+          },
+          "terminal_agent": {
+            "tokens": 57330,
+            "mean_kl": 0.296419,
+            "ppl_base": 7.6369,
+            "ppl_quant": 7.8454
+          }
+        }
+      },
+      "probe-guard": {
+        "eval_set": "probe-guard.jsonl",
+        "rows": 76,
+        "tokens": 22746,
+        "ppl_base": 61.0805,
+        "ppl_quant": 61.2168,
+        "ppl_delta_pct": 0.223,
+        "mean_kl": 0.03425,
+        "weighted_kl": 0.039319,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 3.5385,
+        "elapsed_s": 7.62,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 988,
+            "mean_kl": 0.025389,
+            "ppl_base": 196.3369,
+            "ppl_quant": 189.4703
+          },
+          "belebele_deu_Latn": {
+            "tokens": 1065,
+            "mean_kl": 0.032807,
+            "ppl_base": 112.0449,
+            "ppl_quant": 111.8373
+          },
+          "belebele_fra_Latn": {
+            "tokens": 1153,
+            "mean_kl": 0.051837,
+            "ppl_base": 117.8634,
+            "ppl_quant": 116.528
+          },
+          "belebele_hin_Deva": {
+            "tokens": 1682,
+            "mean_kl": 0.044572,
+            "ppl_base": 61.9491,
+            "ppl_quant": 62.1414
+          },
+          "belebele_ita_Latn": {
+            "tokens": 981,
+            "mean_kl": 0.047624,
+            "ppl_base": 128.2332,
+            "ppl_quant": 127.3589
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 885,
+            "mean_kl": 0.044455,
+            "ppl_base": 148.464,
+            "ppl_quant": 145.3142
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 1135,
+            "mean_kl": 0.046645,
+            "ppl_base": 128.6847,
+            "ppl_quant": 127.3766
+          },
+          "belebele_spa_Latn": {
+            "tokens": 956,
+            "mean_kl": 0.03755,
+            "ppl_base": 151.1492,
+            "ppl_quant": 151.6168
+          },
+          "belebele_zho_Hans": {
+            "tokens": 839,
+            "mean_kl": 0.022988,
+            "ppl_base": 552.7534,
+            "ppl_quant": 564.4735
+          },
+          "no_robots": {
+            "tokens": 13062,
+            "mean_kl": 0.029864,
+            "ppl_base": 33.9924,
+            "ppl_quant": 34.2864
+          }
+        }
+      }
+    },
+    "gguf_q4_k_xl": {
+      "probe-v4": {
+        "eval_set": "probe-v4.jsonl",
+        "rows": 378,
+        "tokens": 852269,
+        "ppl_base": 8.5332,
+        "ppl_quant": 7.6857,
+        "ppl_delta_pct": -9.932,
+        "mean_kl": 0.181935,
+        "weighted_kl": 0.071418,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 22.0217,
+        "elapsed_s": 108.99,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 2566,
+            "mean_kl": 0.044506,
+            "ppl_base": 139.4335,
+            "ppl_quant": 93.3407
+          },
+          "belebele_deu_Latn": {
+            "tokens": 2699,
+            "mean_kl": 0.039833,
+            "ppl_base": 119.692,
+            "ppl_quant": 84.1784
+          },
+          "belebele_fra_Latn": {
+            "tokens": 2572,
+            "mean_kl": 0.075399,
+            "ppl_base": 134.628,
+            "ppl_quant": 92.7249
+          },
+          "belebele_hin_Deva": {
+            "tokens": 3652,
+            "mean_kl": 0.061141,
+            "ppl_base": 45.5772,
+            "ppl_quant": 30.8696
+          },
+          "belebele_ita_Latn": {
+            "tokens": 2761,
+            "mean_kl": 0.055478,
+            "ppl_base": 120.7844,
+            "ppl_quant": 82.0418
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 2350,
+            "mean_kl": 0.049014,
+            "ppl_base": 163.5761,
+            "ppl_quant": 110.784
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 2739,
+            "mean_kl": 0.048379,
+            "ppl_base": 139.8915,
+            "ppl_quant": 95.0185
+          },
+          "belebele_spa_Latn": {
+            "tokens": 2725,
+            "mean_kl": 0.042676,
+            "ppl_base": 124.6017,
+            "ppl_quant": 89.6574
+          },
+          "belebele_zho_Hans": {
+            "tokens": 2177,
+            "mean_kl": 0.041399,
+            "ppl_base": 404.5101,
+            "ppl_quant": 252.871
+          },
+          "chat": {
+            "tokens": 220943,
+            "mean_kl": 0.012932,
+            "ppl_base": 4.2233,
+            "ppl_quant": 4.0206
+          },
+          "conversational_agent": {
+            "tokens": 73240,
+            "mean_kl": 1.245688,
+            "ppl_base": 6194.1829,
+            "ppl_quant": 3545.6311
+          },
+          "instruction_following": {
+            "tokens": 41479,
+            "mean_kl": 0.02142,
+            "ppl_base": 7.8094,
+            "ppl_quant": 6.9751
+          },
+          "math": {
+            "tokens": 303481,
+            "mean_kl": 0.053325,
+            "ppl_base": 3.0843,
+            "ppl_quant": 2.9584
+          },
+          "science": {
+            "tokens": 66035,
+            "mean_kl": 0.044738,
+            "ppl_base": 5.5573,
+            "ppl_quant": 5.1141
+          },
+          "swe": {
+            "tokens": 65520,
+            "mean_kl": 0.447895,
+            "ppl_base": 4.2936,
+            "ppl_quant": 4.4451
+          },
+          "terminal_agent": {
+            "tokens": 57330,
+            "mean_kl": 0.180497,
+            "ppl_base": 7.6369,
+            "ppl_quant": 6.6951
+          }
+        }
+      },
+      "probe-guard": {
+        "eval_set": "probe-guard.jsonl",
+        "rows": 76,
+        "tokens": 22746,
+        "ppl_base": 61.0805,
+        "ppl_quant": 46.6382,
+        "ppl_delta_pct": -23.645,
+        "mean_kl": 0.041805,
+        "weighted_kl": 0.056624,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 4.3065,
+        "elapsed_s": 7.52,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 988,
+            "mean_kl": 0.038626,
+            "ppl_base": 196.3369,
+            "ppl_quant": 133.5581
+          },
+          "belebele_deu_Latn": {
+            "tokens": 1065,
+            "mean_kl": 0.033695,
+            "ppl_base": 112.0449,
+            "ppl_quant": 78.1488
+          },
+          "belebele_fra_Latn": {
+            "tokens": 1153,
+            "mean_kl": 0.048341,
+            "ppl_base": 117.8634,
+            "ppl_quant": 82.6341
+          },
+          "belebele_hin_Deva": {
+            "tokens": 1682,
+            "mean_kl": 0.09789,
+            "ppl_base": 61.9491,
+            "ppl_quant": 37.7262
+          },
+          "belebele_ita_Latn": {
+            "tokens": 981,
+            "mean_kl": 0.083756,
+            "ppl_base": 128.2332,
+            "ppl_quant": 85.0899
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 885,
+            "mean_kl": 0.065,
+            "ppl_base": 148.464,
+            "ppl_quant": 93.9697
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 1135,
+            "mean_kl": 0.060584,
+            "ppl_base": 128.6847,
+            "ppl_quant": 82.1118
+          },
+          "belebele_spa_Latn": {
+            "tokens": 956,
+            "mean_kl": 0.048488,
+            "ppl_base": 151.1492,
+            "ppl_quant": 103.7097
+          },
+          "belebele_zho_Hans": {
+            "tokens": 839,
+            "mean_kl": 0.033239,
+            "ppl_base": 552.7534,
+            "ppl_quant": 347.1086
+          },
+          "no_robots": {
+            "tokens": 13062,
+            "mean_kl": 0.028614,
+            "ppl_base": 33.9924,
+            "ppl_quant": 29.0313
+          }
+        }
+      }
+    },
+    "w26_rco": {
+      "probe-v4": {
+        "eval_set": "probe-v4.jsonl",
+        "rows": 378,
+        "tokens": 852269,
+        "ppl_base": 8.5332,
+        "ppl_quant": 4.2278,
+        "ppl_delta_pct": -50.454,
+        "mean_kl": 0.426471,
+        "weighted_kl": 0.271743,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 10.9726,
+        "elapsed_s": 129.61,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 2566,
+            "mean_kl": 0.49505,
+            "ppl_base": 139.4335,
+            "ppl_quant": 34.9373
+          },
+          "belebele_deu_Latn": {
+            "tokens": 2699,
+            "mean_kl": 0.386624,
+            "ppl_base": 119.692,
+            "ppl_quant": 34.2272
+          },
+          "belebele_fra_Latn": {
+            "tokens": 2572,
+            "mean_kl": 0.376153,
+            "ppl_base": 134.628,
+            "ppl_quant": 37.4946
+          },
+          "belebele_hin_Deva": {
+            "tokens": 3652,
+            "mean_kl": 0.555093,
+            "ppl_base": 45.5772,
+            "ppl_quant": 16.5755
+          },
+          "belebele_ita_Latn": {
+            "tokens": 2761,
+            "mean_kl": 0.325745,
+            "ppl_base": 120.7844,
+            "ppl_quant": 36.029
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 2350,
+            "mean_kl": 0.530363,
+            "ppl_base": 163.5761,
+            "ppl_quant": 43.5879
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 2739,
+            "mean_kl": 0.346089,
+            "ppl_base": 139.8915,
+            "ppl_quant": 35.6882
+          },
+          "belebele_spa_Latn": {
+            "tokens": 2725,
+            "mean_kl": 0.360792,
+            "ppl_base": 124.6017,
+            "ppl_quant": 38.823
+          },
+          "belebele_zho_Hans": {
+            "tokens": 2177,
+            "mean_kl": 0.286978,
+            "ppl_base": 404.5101,
+            "ppl_quant": 70.9043
+          },
+          "chat": {
+            "tokens": 220943,
+            "mean_kl": 0.174408,
+            "ppl_base": 4.2233,
+            "ppl_quant": 3.6789
+          },
+          "conversational_agent": {
+            "tokens": 73240,
+            "mean_kl": 2.258374,
+            "ppl_base": 6194.1829,
+            "ppl_quant": 38.1519
+          },
+          "instruction_following": {
+            "tokens": 41479,
+            "mean_kl": 0.176365,
+            "ppl_base": 7.8094,
+            "ppl_quant": 4.8835
+          },
+          "math": {
+            "tokens": 303481,
+            "mean_kl": 0.179546,
+            "ppl_base": 3.0843,
+            "ppl_quant": 2.3963
+          },
+          "science": {
+            "tokens": 66035,
+            "mean_kl": 0.180331,
+            "ppl_base": 5.5573,
+            "ppl_quant": 3.8194
+          },
+          "swe": {
+            "tokens": 65520,
+            "mean_kl": 0.856279,
+            "ppl_base": 4.2936,
+            "ppl_quant": 4.1334
+          },
+          "terminal_agent": {
+            "tokens": 57330,
+            "mean_kl": 0.34371,
+            "ppl_base": 7.6369,
+            "ppl_quant": 3.7441
+          }
+        }
+      },
+      "probe-guard": {
+        "eval_set": "probe-guard.jsonl",
+        "rows": 76,
+        "tokens": 22746,
+        "ppl_base": 61.0805,
+        "ppl_quant": 23.3278,
+        "ppl_delta_pct": -61.808,
+        "mean_kl": 0.327192,
+        "weighted_kl": 0.415938,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 7.6681,
+        "elapsed_s": 12.25,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 988,
+            "mean_kl": 0.446441,
+            "ppl_base": 196.3369,
+            "ppl_quant": 49.6433
+          },
+          "belebele_deu_Latn": {
+            "tokens": 1065,
+            "mean_kl": 0.392333,
+            "ppl_base": 112.0449,
+            "ppl_quant": 32.8193
+          },
+          "belebele_fra_Latn": {
+            "tokens": 1153,
+            "mean_kl": 0.414726,
+            "ppl_base": 117.8634,
+            "ppl_quant": 38.6138
+          },
+          "belebele_hin_Deva": {
+            "tokens": 1682,
+            "mean_kl": 0.597379,
+            "ppl_base": 61.9491,
+            "ppl_quant": 17.0495
+          },
+          "belebele_ita_Latn": {
+            "tokens": 981,
+            "mean_kl": 0.279833,
+            "ppl_base": 128.2332,
+            "ppl_quant": 40.2343
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 885,
+            "mean_kl": 0.581439,
+            "ppl_base": 148.464,
+            "ppl_quant": 37.7116
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 1135,
+            "mean_kl": 0.417119,
+            "ppl_base": 128.6847,
+            "ppl_quant": 31.1011
+          },
+          "belebele_spa_Latn": {
+            "tokens": 956,
+            "mean_kl": 0.320536,
+            "ppl_base": 151.1492,
+            "ppl_quant": 39.6722
+          },
+          "belebele_zho_Hans": {
+            "tokens": 839,
+            "mean_kl": 0.29364,
+            "ppl_base": 552.7534,
+            "ppl_quant": 85.4221
+          },
+          "no_robots": {
+            "tokens": 13062,
+            "mean_kl": 0.251501,
+            "ppl_base": 33.9924,
+            "ppl_quant": 17.1135
+          }
+        }
+      }
+    },
+    "exl3_3bpw": {
+      "probe-v4": {
+        "eval_set": "probe-v4.jsonl",
+        "rows": 378,
+        "tokens": 852269,
+        "ppl_base": 8.5332,
+        "ppl_quant": 8.9808,
+        "ppl_delta_pct": 5.246,
+        "mean_kl": 0.487108,
+        "weighted_kl": 0.192445,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 26.4226,
+        "elapsed_s": 108.16,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 2566,
+            "mean_kl": 0.108089,
+            "ppl_base": 139.4335,
+            "ppl_quant": 144.3201
+          },
+          "belebele_deu_Latn": {
+            "tokens": 2699,
+            "mean_kl": 0.107565,
+            "ppl_base": 119.692,
+            "ppl_quant": 121.657
+          },
+          "belebele_fra_Latn": {
+            "tokens": 2572,
+            "mean_kl": 0.165072,
+            "ppl_base": 134.628,
+            "ppl_quant": 145.0696
+          },
+          "belebele_hin_Deva": {
+            "tokens": 3652,
+            "mean_kl": 0.097966,
+            "ppl_base": 45.5772,
+            "ppl_quant": 46.9171
+          },
+          "belebele_ita_Latn": {
+            "tokens": 2761,
+            "mean_kl": 0.105148,
+            "ppl_base": 120.7844,
+            "ppl_quant": 127.4882
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 2350,
+            "mean_kl": 0.119691,
+            "ppl_base": 163.5761,
+            "ppl_quant": 174.4014
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 2739,
+            "mean_kl": 0.106098,
+            "ppl_base": 139.8915,
+            "ppl_quant": 153.0769
+          },
+          "belebele_spa_Latn": {
+            "tokens": 2725,
+            "mean_kl": 0.132645,
+            "ppl_base": 124.6017,
+            "ppl_quant": 133.7209
+          },
+          "belebele_zho_Hans": {
+            "tokens": 2177,
+            "mean_kl": 0.089464,
+            "ppl_base": 404.5101,
+            "ppl_quant": 468.3932
+          },
+          "chat": {
+            "tokens": 220943,
+            "mean_kl": 0.045471,
+            "ppl_base": 4.2233,
+            "ppl_quant": 4.1786
+          },
+          "conversational_agent": {
+            "tokens": 73240,
+            "mean_kl": 3.19243,
+            "ppl_base": 6194.1829,
+            "ppl_quant": 9600.2833
+          },
+          "instruction_following": {
+            "tokens": 41479,
+            "mean_kl": 0.075573,
+            "ppl_base": 7.8094,
+            "ppl_quant": 7.4318
+          },
+          "math": {
+            "tokens": 303481,
+            "mean_kl": 0.142889,
+            "ppl_base": 3.0843,
+            "ppl_quant": 3.0986
+          },
+          "science": {
+            "tokens": 66035,
+            "mean_kl": 0.110444,
+            "ppl_base": 5.5573,
+            "ppl_quant": 5.4054
+          },
+          "swe": {
+            "tokens": 65520,
+            "mean_kl": 1.226232,
+            "ppl_base": 4.2936,
+            "ppl_quant": 5.1058
+          },
+          "terminal_agent": {
+            "tokens": 57330,
+            "mean_kl": 0.599747,
+            "ppl_base": 7.6369,
+            "ppl_quant": 8.1136
+          }
+        }
+      },
+      "probe-guard": {
+        "eval_set": "probe-guard.jsonl",
+        "rows": 76,
+        "tokens": 22746,
+        "ppl_base": 61.0805,
+        "ppl_quant": 60.6285,
+        "ppl_delta_pct": -0.74,
+        "mean_kl": 0.09181,
+        "weighted_kl": 0.116791,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 8.7106,
+        "elapsed_s": 7.48,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 988,
+            "mean_kl": 0.069578,
+            "ppl_base": 196.3369,
+            "ppl_quant": 215.0538
+          },
+          "belebele_deu_Latn": {
+            "tokens": 1065,
+            "mean_kl": 0.102045,
+            "ppl_base": 112.0449,
+            "ppl_quant": 127.4376
+          },
+          "belebele_fra_Latn": {
+            "tokens": 1153,
+            "mean_kl": 0.130108,
+            "ppl_base": 117.8634,
+            "ppl_quant": 124.0333
+          },
+          "belebele_hin_Deva": {
+            "tokens": 1682,
+            "mean_kl": 0.100426,
+            "ppl_base": 61.9491,
+            "ppl_quant": 56.8403
+          },
+          "belebele_ita_Latn": {
+            "tokens": 981,
+            "mean_kl": 0.143979,
+            "ppl_base": 128.2332,
+            "ppl_quant": 126.7115
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 885,
+            "mean_kl": 0.166242,
+            "ppl_base": 148.464,
+            "ppl_quant": 150.2291
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 1135,
+            "mean_kl": 0.131677,
+            "ppl_base": 128.6847,
+            "ppl_quant": 141.8996
+          },
+          "belebele_spa_Latn": {
+            "tokens": 956,
+            "mean_kl": 0.124019,
+            "ppl_base": 151.1492,
+            "ppl_quant": 170.999
+          },
+          "belebele_zho_Hans": {
+            "tokens": 839,
+            "mean_kl": 0.08304,
+            "ppl_base": 552.7534,
+            "ppl_quant": 614.8981
+          },
+          "no_robots": {
+            "tokens": 13062,
+            "mean_kl": 0.073948,
+            "ppl_base": 33.9924,
+            "ppl_quant": 32.3989
+          }
+        }
+      }
+    },
+    "gguf_q2_k_xl": {
+      "probe-v4": {
+        "eval_set": "probe-v4.jsonl",
+        "rows": 378,
+        "tokens": 852269,
+        "ppl_base": 8.5332,
+        "ppl_quant": 6.123,
+        "ppl_delta_pct": -28.245,
+        "mean_kl": 0.676029,
+        "weighted_kl": 0.338504,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 25.538,
+        "elapsed_s": 108.11,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 2566,
+            "mean_kl": 0.492277,
+            "ppl_base": 139.4335,
+            "ppl_quant": 60.0501
+          },
+          "belebele_deu_Latn": {
+            "tokens": 2699,
+            "mean_kl": 0.500244,
+            "ppl_base": 119.692,
+            "ppl_quant": 51.0369
+          },
+          "belebele_fra_Latn": {
+            "tokens": 2572,
+            "mean_kl": 0.563936,
+            "ppl_base": 134.628,
+            "ppl_quant": 51.2366
+          },
+          "belebele_hin_Deva": {
+            "tokens": 3652,
+            "mean_kl": 0.448723,
+            "ppl_base": 45.5772,
+            "ppl_quant": 22.8231
+          },
+          "belebele_ita_Latn": {
+            "tokens": 2761,
+            "mean_kl": 0.551386,
+            "ppl_base": 120.7844,
+            "ppl_quant": 45.9624
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 2350,
+            "mean_kl": 0.540435,
+            "ppl_base": 163.5761,
+            "ppl_quant": 71.2795
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 2739,
+            "mean_kl": 0.474313,
+            "ppl_base": 139.8915,
+            "ppl_quant": 59.2837
+          },
+          "belebele_spa_Latn": {
+            "tokens": 2725,
+            "mean_kl": 0.504619,
+            "ppl_base": 124.6017,
+            "ppl_quant": 55.485
+          },
+          "belebele_zho_Hans": {
+            "tokens": 2177,
+            "mean_kl": 0.498,
+            "ppl_base": 404.5101,
+            "ppl_quant": 143.3956
+          },
+          "chat": {
+            "tokens": 220943,
+            "mean_kl": 0.119415,
+            "ppl_base": 4.2233,
+            "ppl_quant": 3.7873
+          },
+          "conversational_agent": {
+            "tokens": 73240,
+            "mean_kl": 4.208549,
+            "ppl_base": 6194.1829,
+            "ppl_quant": 586.7307
+          },
+          "instruction_following": {
+            "tokens": 41479,
+            "mean_kl": 0.184841,
+            "ppl_base": 7.8094,
+            "ppl_quant": 5.7824
+          },
+          "math": {
+            "tokens": 303481,
+            "mean_kl": 0.235381,
+            "ppl_base": 3.0843,
+            "ppl_quant": 2.7218
+          },
+          "science": {
+            "tokens": 66035,
+            "mean_kl": 0.223247,
+            "ppl_base": 5.5573,
+            "ppl_quant": 4.5953
+          },
+          "swe": {
+            "tokens": 65520,
+            "mean_kl": 1.43124,
+            "ppl_base": 4.2936,
+            "ppl_quant": 5.021
+          },
+          "terminal_agent": {
+            "tokens": 57330,
+            "mean_kl": 0.726844,
+            "ppl_base": 7.6369,
+            "ppl_quant": 6.1323
+          }
+        }
+      },
+      "probe-guard": {
+        "eval_set": "probe-guard.jsonl",
+        "rows": 76,
+        "tokens": 22746,
+        "ppl_base": 61.0805,
+        "ppl_quant": 34.1698,
+        "ppl_delta_pct": -44.058,
+        "mean_kl": 0.373193,
+        "weighted_kl": 0.498372,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "p999_kl": 11.7012,
+        "elapsed_s": 7.51,
+        "domains": {
+          "belebele_arb_Arab": {
+            "tokens": 988,
+            "mean_kl": 0.450995,
+            "ppl_base": 196.3369,
+            "ppl_quant": 85.8455
+          },
+          "belebele_deu_Latn": {
+            "tokens": 1065,
+            "mean_kl": 0.460482,
+            "ppl_base": 112.0449,
+            "ppl_quant": 49.4519
+          },
+          "belebele_fra_Latn": {
+            "tokens": 1153,
+            "mean_kl": 0.48008,
+            "ppl_base": 117.8634,
+            "ppl_quant": 50.6616
+          },
+          "belebele_hin_Deva": {
+            "tokens": 1682,
+            "mean_kl": 0.417988,
+            "ppl_base": 61.9491,
+            "ppl_quant": 25.2694
+          },
+          "belebele_ita_Latn": {
+            "tokens": 981,
+            "mean_kl": 0.517873,
+            "ppl_base": 128.2332,
+            "ppl_quant": 57.5588
+          },
+          "belebele_jpn_Jpan": {
+            "tokens": 885,
+            "mean_kl": 0.631291,
+            "ppl_base": 148.464,
+            "ppl_quant": 63.333
+          },
+          "belebele_rus_Cyrl": {
+            "tokens": 1135,
+            "mean_kl": 0.463657,
+            "ppl_base": 128.6847,
+            "ppl_quant": 53.0984
+          },
+          "belebele_spa_Latn": {
+            "tokens": 956,
+            "mean_kl": 0.558992,
+            "ppl_base": 151.1492,
+            "ppl_quant": 62.1707
+          },
+          "belebele_zho_Hans": {
+            "tokens": 839,
+            "mean_kl": 0.503991,
+            "ppl_base": 552.7534,
+            "ppl_quant": 177.9865
+          },
+          "no_robots": {
+            "tokens": 13062,
+            "mean_kl": 0.286774,
+            "ppl_base": 33.9924,
+            "ppl_quant": 23.725
+          }
+        }
+      }
+    }
+  },
+  "paired_bootstrap_20000_draws": {
+    "probe-v4": {
+      "w4_hgptq_vs_exl3_4bpw": {
+        "rows": 378,
+        "tokens": 852269,
+        "mean_kl_a": 0.258263,
+        "mean_kl_b": 0.248576,
+        "mean_kl_diff_b_minus_a": -0.009687,
+        "mean_kl_ratio_b_over_a": 0.9625,
+        "ci95_mean_kl_diff": [
+          -0.01505,
+          -0.004395
+        ],
+        "p_a_beats_b_mean_kl": 0.00025,
+        "row_wins_a": 131,
+        "row_wins_b": 247,
+        "row_ties": 0,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "weighted_kl_a": 0.100223,
+        "weighted_kl_b": 0.092909,
+        "weighted_kl_diff_b_minus_a": -0.007314,
+        "weighted_kl_ratio_b_over_a": 0.927,
+        "ci95_weighted_kl_diff": [
+          -0.009663,
+          -0.005072
+        ],
+        "p_a_beats_b_weighted_kl": 0.0
+      },
+      "w4_hgptq_vs_gguf_q4_k_xl": {
+        "rows": 378,
+        "tokens": 852269,
+        "mean_kl_a": 0.258263,
+        "mean_kl_b": 0.181935,
+        "mean_kl_diff_b_minus_a": -0.076329,
+        "mean_kl_ratio_b_over_a": 0.7045,
+        "ci95_mean_kl_diff": [
+          -0.09592,
+          -0.058037
+        ],
+        "p_a_beats_b_mean_kl": 0.0,
+        "row_wins_a": 85,
+        "row_wins_b": 293,
+        "row_ties": 0,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "weighted_kl_a": 0.100223,
+        "weighted_kl_b": 0.071418,
+        "weighted_kl_diff_b_minus_a": -0.028805,
+        "weighted_kl_ratio_b_over_a": 0.7126,
+        "ci95_weighted_kl_diff": [
+          -0.032259,
+          -0.025658
+        ],
+        "p_a_beats_b_weighted_kl": 0.0
+      },
+      "exl3_4bpw_vs_gguf_q4_k_xl": {
+        "rows": 378,
+        "tokens": 852269,
+        "mean_kl_a": 0.248576,
+        "mean_kl_b": 0.181935,
+        "mean_kl_diff_b_minus_a": -0.066642,
+        "mean_kl_ratio_b_over_a": 0.7319,
+        "ci95_mean_kl_diff": [
+          -0.085369,
+          -0.049386
+        ],
+        "p_a_beats_b_mean_kl": 0.0,
+        "row_wins_a": 103,
+        "row_wins_b": 275,
+        "row_ties": 0,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "weighted_kl_a": 0.092909,
+        "weighted_kl_b": 0.071418,
+        "weighted_kl_diff_b_minus_a": -0.021491,
+        "weighted_kl_ratio_b_over_a": 0.7687,
+        "ci95_weighted_kl_diff": [
+          -0.02364,
+          -0.019508
+        ],
+        "p_a_beats_b_weighted_kl": 0.0
+      },
+      "w26_rco_vs_exl3_3bpw": {
+        "rows": 378,
+        "tokens": 852269,
+        "mean_kl_a": 0.426471,
+        "mean_kl_b": 0.487108,
+        "mean_kl_diff_b_minus_a": 0.060637,
+        "mean_kl_ratio_b_over_a": 1.1422,
+        "ci95_mean_kl_diff": [
+          0.019763,
+          0.104065
+        ],
+        "p_a_beats_b_mean_kl": 0.9982,
+        "row_wins_a": 60,
+        "row_wins_b": 318,
+        "row_ties": 0,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "weighted_kl_a": 0.271743,
+        "weighted_kl_b": 0.192445,
+        "weighted_kl_diff_b_minus_a": -0.079298,
+        "weighted_kl_ratio_b_over_a": 0.7082,
+        "ci95_weighted_kl_diff": [
+          -0.086659,
+          -0.071507
+        ],
+        "p_a_beats_b_weighted_kl": 0.0
+      },
+      "w26_rco_vs_gguf_q2_k_xl": {
+        "rows": 378,
+        "tokens": 852269,
+        "mean_kl_a": 0.426471,
+        "mean_kl_b": 0.676029,
+        "mean_kl_diff_b_minus_a": 0.249558,
+        "mean_kl_ratio_b_over_a": 1.5852,
+        "ci95_mean_kl_diff": [
+          0.175019,
+          0.329819
+        ],
+        "p_a_beats_b_mean_kl": 1.0,
+        "row_wins_a": 217,
+        "row_wins_b": 161,
+        "row_ties": 0,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "weighted_kl_a": 0.271743,
+        "weighted_kl_b": 0.338504,
+        "weighted_kl_diff_b_minus_a": 0.066761,
+        "weighted_kl_ratio_b_over_a": 1.2457,
+        "ci95_weighted_kl_diff": [
+          0.055036,
+          0.080219
+        ],
+        "p_a_beats_b_weighted_kl": 1.0
+      },
+      "exl3_3bpw_vs_gguf_q2_k_xl": {
+        "rows": 378,
+        "tokens": 852269,
+        "mean_kl_a": 0.487108,
+        "mean_kl_b": 0.676029,
+        "mean_kl_diff_b_minus_a": 0.188922,
+        "mean_kl_ratio_b_over_a": 1.3878,
+        "ci95_mean_kl_diff": [
+          0.151666,
+          0.229176
+        ],
+        "p_a_beats_b_mean_kl": 1.0,
+        "row_wins_a": 378,
+        "row_wins_b": 0,
+        "row_ties": 0,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "weighted_kl_a": 0.192445,
+        "weighted_kl_b": 0.338504,
+        "weighted_kl_diff_b_minus_a": 0.146059,
+        "weighted_kl_ratio_b_over_a": 1.759,
+        "ci95_weighted_kl_diff": [
+          0.137211,
+          0.156417
+        ],
+        "p_a_beats_b_weighted_kl": 1.0
+      },
+      "w4_hgptq_vs_w26_rco": {
+        "rows": 378,
+        "tokens": 852269,
+        "mean_kl_a": 0.258263,
+        "mean_kl_b": 0.426471,
+        "mean_kl_diff_b_minus_a": 0.168208,
+        "mean_kl_ratio_b_over_a": 1.6513,
+        "ci95_mean_kl_diff": [
+          0.146878,
+          0.191068
+        ],
+        "p_a_beats_b_mean_kl": 1.0,
+        "row_wins_a": 375,
+        "row_wins_b": 3,
+        "row_ties": 0,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "weighted_kl_a": 0.100223,
+        "weighted_kl_b": 0.271743,
+        "weighted_kl_diff_b_minus_a": 0.171521,
+        "weighted_kl_ratio_b_over_a": 2.7114,
+        "ci95_weighted_kl_diff": [
+          0.162468,
+          0.180973
+        ],
+        "p_a_beats_b_weighted_kl": 1.0
+      }
+    },
+    "probe-guard": {
+      "w4_hgptq_vs_exl3_4bpw": {
+        "rows": 76,
+        "tokens": 22746,
+        "mean_kl_a": 0.052982,
+        "mean_kl_b": 0.03425,
+        "mean_kl_diff_b_minus_a": -0.018733,
+        "mean_kl_ratio_b_over_a": 0.6464,
+        "ci95_mean_kl_diff": [
+          -0.025155,
+          -0.012264
+        ],
+        "p_a_beats_b_mean_kl": 0.0,
+        "row_wins_a": 8,
+        "row_wins_b": 68,
+        "row_ties": 0,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "weighted_kl_a": 0.073907,
+        "weighted_kl_b": 0.039319,
+        "weighted_kl_diff_b_minus_a": -0.034589,
+        "weighted_kl_ratio_b_over_a": 0.532,
+        "ci95_weighted_kl_diff": [
+          -0.044119,
+          -0.025646
+        ],
+        "p_a_beats_b_weighted_kl": 0.0
+      },
+      "w4_hgptq_vs_gguf_q4_k_xl": {
+        "rows": 76,
+        "tokens": 22746,
+        "mean_kl_a": 0.052982,
+        "mean_kl_b": 0.041805,
+        "mean_kl_diff_b_minus_a": -0.011178,
+        "mean_kl_ratio_b_over_a": 0.789,
+        "ci95_mean_kl_diff": [
+          -0.017178,
+          -0.005057
+        ],
+        "p_a_beats_b_mean_kl": 0.0003,
+        "row_wins_a": 29,
+        "row_wins_b": 47,
+        "row_ties": 0,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "weighted_kl_a": 0.073907,
+        "weighted_kl_b": 0.056624,
+        "weighted_kl_diff_b_minus_a": -0.017283,
+        "weighted_kl_ratio_b_over_a": 0.7662,
+        "ci95_weighted_kl_diff": [
+          -0.027531,
+          -0.0075
+        ],
+        "p_a_beats_b_weighted_kl": 0.00035
+      },
+      "exl3_4bpw_vs_gguf_q4_k_xl": {
+        "rows": 76,
+        "tokens": 22746,
+        "mean_kl_a": 0.03425,
+        "mean_kl_b": 0.041805,
+        "mean_kl_diff_b_minus_a": 0.007555,
+        "mean_kl_ratio_b_over_a": 1.2206,
+        "ci95_mean_kl_diff": [
+          0.001371,
+          0.015221
+        ],
+        "p_a_beats_b_mean_kl": 0.99285,
+        "row_wins_a": 58,
+        "row_wins_b": 18,
+        "row_ties": 0,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "weighted_kl_a": 0.039319,
+        "weighted_kl_b": 0.056624,
+        "weighted_kl_diff_b_minus_a": 0.017306,
+        "weighted_kl_ratio_b_over_a": 1.4401,
+        "ci95_weighted_kl_diff": [
+          0.00889,
+          0.027257
+        ],
+        "p_a_beats_b_weighted_kl": 1.0
+      },
+      "w26_rco_vs_exl3_3bpw": {
+        "rows": 76,
+        "tokens": 22746,
+        "mean_kl_a": 0.327192,
+        "mean_kl_b": 0.09181,
+        "mean_kl_diff_b_minus_a": -0.235382,
+        "mean_kl_ratio_b_over_a": 0.2806,
+        "ci95_mean_kl_diff": [
+          -0.267902,
+          -0.204972
+        ],
+        "p_a_beats_b_mean_kl": 0.0,
+        "row_wins_a": 0,
+        "row_wins_b": 76,
+        "row_ties": 0,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "weighted_kl_a": 0.415938,
+        "weighted_kl_b": 0.116791,
+        "weighted_kl_diff_b_minus_a": -0.299148,
+        "weighted_kl_ratio_b_over_a": 0.2808,
+        "ci95_weighted_kl_diff": [
+          -0.325756,
+          -0.272196
+        ],
+        "p_a_beats_b_weighted_kl": 0.0
+      },
+      "w26_rco_vs_gguf_q2_k_xl": {
+        "rows": 76,
+        "tokens": 22746,
+        "mean_kl_a": 0.327192,
+        "mean_kl_b": 0.373193,
+        "mean_kl_diff_b_minus_a": 0.046001,
+        "mean_kl_ratio_b_over_a": 1.1406,
+        "ci95_mean_kl_diff": [
+          0.014308,
+          0.079301
+        ],
+        "p_a_beats_b_mean_kl": 0.9977,
+        "row_wins_a": 59,
+        "row_wins_b": 17,
+        "row_ties": 0,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "weighted_kl_a": 0.415938,
+        "weighted_kl_b": 0.498372,
+        "weighted_kl_diff_b_minus_a": 0.082434,
+        "weighted_kl_ratio_b_over_a": 1.1982,
+        "ci95_weighted_kl_diff": [
+          0.057296,
+          0.111217
+        ],
+        "p_a_beats_b_weighted_kl": 1.0
+      },
+      "exl3_3bpw_vs_gguf_q2_k_xl": {
+        "rows": 76,
+        "tokens": 22746,
+        "mean_kl_a": 0.09181,
+        "mean_kl_b": 0.373193,
+        "mean_kl_diff_b_minus_a": 0.281383,
+        "mean_kl_ratio_b_over_a": 4.0648,
+        "ci95_mean_kl_diff": [
+          0.256027,
+          0.310219
+        ],
+        "p_a_beats_b_mean_kl": 1.0,
+        "row_wins_a": 76,
+        "row_wins_b": 0,
+        "row_ties": 0,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "weighted_kl_a": 0.116791,
+        "weighted_kl_b": 0.498372,
+        "weighted_kl_diff_b_minus_a": 0.381582,
+        "weighted_kl_ratio_b_over_a": 4.2672,
+        "ci95_weighted_kl_diff": [
+          0.361538,
+          0.403694
+        ],
+        "p_a_beats_b_weighted_kl": 1.0
+      },
+      "w4_hgptq_vs_w26_rco": {
+        "rows": 76,
+        "tokens": 22746,
+        "mean_kl_a": 0.052982,
+        "mean_kl_b": 0.327192,
+        "mean_kl_diff_b_minus_a": 0.27421,
+        "mean_kl_ratio_b_over_a": 6.1755,
+        "ci95_mean_kl_diff": [
+          0.24248,
+          0.307997
+        ],
+        "p_a_beats_b_mean_kl": 1.0,
+        "row_wins_a": 76,
+        "row_wins_b": 0,
+        "row_ties": 0,
+        "weighted_kl_protocol": "cascade90-ml10-language-macro",
+        "weighted_kl_a": 0.073907,
+        "weighted_kl_b": 0.415938,
+        "weighted_kl_diff_b_minus_a": 0.342031,
+        "weighted_kl_ratio_b_over_a": 5.6278,
+        "ci95_weighted_kl_diff": [
+          0.314624,
+          0.36851
+        ],
+        "p_a_beats_b_weighted_kl": 1.0
+      }
+    }
+  }
+}

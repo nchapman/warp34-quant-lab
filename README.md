@@ -227,15 +227,41 @@ Full capacity-planner breakdown, `tq4` vs `tq4_all` tradeoffs, LoRA VRAM reserve
 | **`2× 24 GB` (`2× 3090`, `TP=2`)** | `Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO` (`k_hot=160/256`) | `21,256 MiB`/GPU *(w/ `MTP` + `18` GDN slots)* | **`502.3`** | `59.7` / **`95.0`** | **`+1,832 MiB`/GPU** *(`2,856 MiB`/GPU free)* | **`+1,612 MiB`/GPU** *(default `warp34` `k_hot=160`)* |
 | **`2× 24 GB` (`2× 3090`, `TP=2`)** | `Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO` (`k_hot=192..208/256`) | `23,728 MiB`/GPU *(w/ `MTP` + `18` GDN slots)* | **`707.6–787.5`** | `71.4–74.0` / **`124.2–131.6`** | Headless ceiling (`384 MiB`/GPU post-graph free) | Headless (`75%–81.25%` experts in VRAM) |
 
-### 9. `Qwen3.8-27B` 5-Way Comparison vs. Unsloth `NVFP4` & Dynamic 2.0 `GGUF` (`KL/PPL` & `EvalScope`)
-Full teacher-forced KL/PPL receipts ([`unsloth_comparison.json`](results/dense-w4a16-hgptq/27b-g64-h64/unsloth_comparison.json)) and generative `EvalScope` benchmark receipts ([`evalscope_comparison.json`](results/dense-w4a16-hgptq/27b-g64-h64/evalscope_comparison.json), reproducible via `mise run eval`) on `Qwen3.8-27B`:
+### 9. 7-Arm Cross-Format Comparison: `W4A16-HGPTQ` / `W2.6A16-HGPTQ-RCO` vs. `ExLlamaV3` (`EXL3`) & Unsloth Dynamic `GGUF` (`27B` & `9B`)
+Reproducible via [`scripts/run_comparison_suite.py`](scripts/run_comparison_suite.py) and [`src/warp_quant/comparison_runner.py`](src/warp_quant/comparison_runner.py). All 14 arms (`BF16` baseline + 6 quants per size) are evaluated on the **full** `EvalScope` datasets (`541` `IFEval`, `500` `MATH-500`, `164` `HumanEval+` — `1,205` prompts per arm, `max_tokens=2048`, greedy `temperature=0.0`, `enable_thinking=False`, `seed=42`) served identically via `vLLM` (`bfloat16`, `--gdn-prefill-backend triton`), paired with cached-teacher `BF16` `probe-v4` (`378` rows) & `probe-guard` (`76` rows) KL and `20,000`-draw paired bootstrap CIs.
 
-| Checkpoint | Format | Total Size (Text Trunk) | `probe-v4` `weighted_kl` (`mean_kl`) | `probe-guard` `weighted_kl` (`mean_kl`) | `IFEval` Prompt / Inst Strict | `MATH-500` Pass@1 | `HumanEval` Pass@1 |
-|---|---|---:|---:|---:|---:|---:|---:|
-| **`nchapman/Qwen3.8-27B-W4A16-HGPTQ`** | `W4_g64` + $H_{64}$ + `H-CD` + `QAT` (`VLM+MTP`) | **`16.14 GiB`** (`15.00 GiB`) | **`0.1002`** (`0.0970`) | `0.0739` (**`0.0530`**) | **`84.0%` / `89.0%`** | `65.13%` | **`96.0%`** |
-| **`nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO`** | `W2/W4` `RCO` (`30% W4`, `VLM+MTP`, fits `16 GB` `128K`) | **`12.18 GiB`** (`11.71 GiB`) | `0.2717` (`0.4265`) | `0.2966` (`0.3272`) | `77.0%` / `84.7%` | **`70.67%`** | `90.0%` |
-| `unsloth/Qwen3.8-27B-NVFP4` | `NVFP4` (`E2M1 g16`, text-only, no Vision/MTP) | `16.46 GiB` (`16.46 GiB`) | `0.1086` (`0.0928`) | `0.0912` (`0.0730`) | `81.0%` / `86.4%` | `63.05%` | `94.0%` |
-| `unsloth/Qwen3.8-27B-GGUF` (`UD-Q4_K_XL`) | Dynamic 2.0 `Q4_K_XL` (`4.75 bpw`, text-only) | `15.80 GiB` (`15.80 GiB`) | `0.0947` (`0.0558`) | **`0.0680`** (`0.0548`) | `81.0%` / `87.1%` | `62.12%` | **`96.0%`** |
-| `unsloth/Qwen3.8-27B-GGUF` (`UD-Q4_K_M`) | Dynamic 2.0 `Q4_K_M` (`4.65 bpw`, text-only) | `15.49 GiB` (`15.49 GiB`) | `0.1112` (`0.0640`) | `0.0933` (`0.0672`) | `82.0%` / `86.4%` | `63.88%` | `94.0%` |
+> **Why Text Backbone (`layers 0..L-1`) GiB & bpw is the primary size column:** Total checkpoint file size mixes incomparable components (`nchapman/*` bundles Vision + Native MTP + `BF16` `embed_tokens` + `W8_g64` `lm_head`; Unsloth GGUF splits Vision into a separate `mmproj` and quantizes `embed_tokens` to `Q4_K`–`Q6_K`; EXL3 checkpoints vary in whether Vision/MTP are included). Measuring exact stored bytes strictly over `layers 0..L-1` (plus final RMSNorm) isolates the actual transformer trunk compression rate (`Text Total` including `embed_tokens` + `lm_head` and `File Total` are listed in the JSON receipts).
+
+#### `Qwen/Qwen3.8-27B` (`24.35B` Text-Backbone Parameters)
+Receipts: [`probe_comparison.json`](results/dense-w4a16-hgptq/27b-g64-h64/probe_comparison.json) · [`evalscope_comparison.json`](results/dense-w4a16-hgptq/27b-g64-h64/evalscope_comparison.json) *(historical 5-way `NVFP4`/`UD-Q4_K_M` receipt retained in [`unsloth_comparison.json`](results/dense-w4a16-hgptq/27b-g64-h64/unsloth_comparison.json))*.
+
+| Checkpoint | Format | Text Backbone (`bpw`) | `probe-v4` `w_kl` (`mean_kl`) | `probe-guard` `mean_kl` | `IFEval` Prompt / Inst Strict | `MATH-500` Acc | `HumanEval+` Pass@1 | 3-Task Avg |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `Qwen/Qwen3.8-27B` | `BF16` reference (`VLM+MTP`) | `45.36 GiB` (`16.00`) | — | — | `82.62%` / `87.77%` | `84.80%` | `93.29%` | `86.90%` |
+| **`nchapman/Qwen3.8-27B-W4A16-HGPTQ`** | `W4_g64` + $H_{64}$ + `H-CD` + `QAT` (`VLM+MTP`, vLLM Marlin) | **`12.09 GiB`** (`4.26`) | `0.1002` (`0.2583`) | `0.0530` | `81.89%` / `87.41%` | `82.80%` | **`93.29%`** | `85.99%` |
+| `turboderp/Qwen3.8-27B-exl3` (`SCP_4.00bpw`) | `EXL3` trellis `4.00 bpw` (`QTIP`) | `11.39 GiB` (`4.02`) | `0.0929` (`0.2486`) | **`0.0343`** | **`82.26%`** / `87.41%` | **`83.80%`** | `92.68%` | **`86.25%`** |
+| `unsloth/Qwen3.8-27B-GGUF` (`UD-Q4_K_XL`) | Dynamic `Q4_K_XL` (`+19.7%` larger trunk than `W4A16-HGPTQ`) | `14.47 GiB` (`5.11`) | **`0.0714`** (`0.1819`) | `0.0418` | `80.41%` / `86.33%` | `83.20%` | **`93.90%`** | `85.84%` |
+| **`nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO`** | `W2/W4` `RCO` (`30% W4`, `VLM+MTP`, vLLM Marlin) | `8.12 GiB` (`2.86`) | `0.2717` (`0.4265`) | `0.3272` | `75.23%` / `82.73%` | `82.40%` | `81.10%` | `79.58%` |
+| `turboderp/Qwen3.8-27B-exl3` (`SCP_3.00bpw`) | `EXL3` trellis `3.00 bpw` (`QTIP`) | `8.56 GiB` (`3.02`) | **`0.1924`** (`0.4871`) | **`0.0918`** | **`82.07%`** / `87.41%` | **`82.80%`** | **`92.07%`** | **`85.65%`** |
+| `unsloth/Qwen3.8-27B-GGUF` (`UD-Q2_K_XL`) | Dynamic `Q2_K_XL` (mixed `Q2_K`/`Q3_K`/`Q4_K`) | **`7.87 GiB`** (`2.78`) | `0.3385` (`0.6760`) | `0.3732` | `81.52%` / `87.17%` | **`82.80%`** | **`92.07%`** | `85.46%` |
+
+#### `Qwen/Qwen3.5-9B` (`6.92B` Text-Backbone Parameters)
+Receipts: [`probe_comparison.json`](results/dense-w4a16-hgptq/9b-g64-h64/probe_comparison.json) · [`evalscope_comparison.json`](results/dense-w4a16-hgptq/9b-g64-h64/evalscope_comparison.json).
+
+| Checkpoint | Format | Text Backbone (`bpw`) | `probe-v4` `w_kl` (`mean_kl`) | `probe-guard` `mean_kl` | `IFEval` Prompt / Inst Strict | `MATH-500` Acc | `HumanEval+` Pass@1 | 3-Task Avg |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `Qwen/Qwen3.5-9B` | `BF16` reference (`VLM+MTP`) | `12.89 GiB` (`16.00`) | — | — | `84.47%` / `89.33%` | `84.60%` | `84.15%` | `84.41%` |
+| **`nchapman/Qwen3.5-9B-W4A16-HGPTQ`** | `W4_g64` + $H_{64}$ + `H-CD` + `QAT` (`VLM+MTP`, vLLM Marlin) | **`3.43 GiB`** (`4.26`) | `0.0638` (`0.1897`) | `0.0399` | `83.92%` / `88.61%` | `82.60%` | `83.54%` | `83.35%` |
+| `TheMelonGod/Qwen3.5-9B-exl3` (`6hb-4.0bpw`) | `EXL3` trellis `4.00 bpw` (`v1.4.1`, `mul1`) | `3.24 GiB` (`4.02`) | `0.0610` (`0.1914`) | `0.0206` | `83.55%` / `88.85%` | **`83.60%`** | `82.32%` | `83.16%` |
+| `unsloth/Qwen3.5-9B-GGUF` (`UD-Q4_K_XL`) | Dynamic `Q4_K_XL` (`+23.6%` larger trunk than `W4A16-HGPTQ`) | `4.24 GiB` (`5.26`) | **`0.0537`** (`0.1736`) | **`0.0191`** | **`84.66%`** / `89.57%` | **`83.60%`** | **`85.37%`** | **`84.54%`** |
+| **`nchapman/Qwen3.5-9B-W2.6A16-HGPTQ-RCO`** | `W2/W4` `RCO` (`30% W4`, `VLM+MTP`, vLLM Marlin) | **`2.31 GiB`** (`2.86`) | `0.2661` (`0.3431`) | `0.3642` | `60.07%` / `69.54%` | `68.00%` | `60.98%` | `63.02%` |
+| `TheMelonGod/Qwen3.5-9B-exl3` (`6hb-3.0bpw`) | `EXL3` trellis `3.00 bpw` (`v1.4.1`, `mul1`) | `2.43 GiB` (`3.02`) | **`0.1395`** (`0.3708`) | **`0.0685`** | **`84.10%`** / `89.21%` | **`82.80%`** | **`78.66%`** | **`81.85%`** |
+| `unsloth/Qwen3.5-9B-GGUF` (`UD-Q2_K_XL`) | Dynamic `Q2_K_XL` (mixed `Q2_K`/`Q3_K`/`Q4_K`) | `2.52 GiB` (`3.13`) | `0.2810` (`0.6090`) | `0.2011` | `77.45%` / `83.93%` | `73.00%` | `68.90%` | `73.12%` |
+
+#### Key Findings & Methodology Notes
+- **4-bit tier (`W4A16-HGPTQ` vs. `EXL3 4.0bpw` vs. `UD-Q4_K_XL`):** Across both `27B` and `9B`, all three 4-bit methods achieve **statistical parity with `BF16` and with one another** on every generative benchmark (every 95% paired bootstrap CI across `IFEval`, `MATH-500`, and `HumanEval+` spans `0 pp`). `W4A16-HGPTQ` matches `UD-Q4_K_XL` while using **`16.4%` (`27B`) to `19.1%` (`9B`) fewer text-backbone bytes** (`4.26 bpw` vs. `5.11–5.26 bpw`), keeping **Vision + Native MTP** inside the same checkpoint, and serving natively on `vLLM` Marlin / `warp34` W4A16 kernels.
+- **Sub-3-bit / 3-bit tier (`2.78–3.13 bpw`):** **`EXL3 3.0bpw`** (uniform 3-bit QTIP trellis codebook across every layer) and **`UD-Q2_K_XL`** (mixed `Q2_K`/`Q3_K`/`Q4_K` super-blocks) decisively outperform `W2.6A16-HGPTQ-RCO` (`2.86 bpw`) on downstream generative benchmarks (`+6.84 pp` IFEval / `+10.98 pp` HumanEval+ on `27B`; `+24.03 pp` IFEval / `+14.80 pp` MATH-500 / `+17.68 pp` HumanEval+ on `9B`, all $p < 0.001$). Because `W2.6A16-HGPTQ-RCO` is constrained to Marlin-native `int2`/`int4` uniform scalar grids (no 3-bit kernel or vector codebook), ~70% of trunk layers sit on a 4-level `int2` grid, and in-distribution KL QAT lowers `probe-v4` KL while leaving out-of-distribution `probe-guard` KL elevated (`0.3272` on `27B`, `0.3642` on `9B`). Out-of-distribution `probe-guard` KL cleanly flags this gap where in-distribution KL alone masks it, motivating future W3 Marlin/LUT3 or OOD-regularized QAT recipes.
+- **Evaluation parity note:** All three formats are weight-only (`A16`) quants. To eliminate backend confounds (`vLLM` vs. `llama.cpp` vs. `TabbyAPI` GDN kernels, RoPE, and chat templates) and avoid the FP32-vs-BF16 activation mismatch of HF's native `gguf_file` loader, `EXL3` (reconstructed via `exllamav3` `LinearEXL3.get_weight_tensor()` and verified against live GPU `LinearEXL3.forward` with `cosine >= 0.9999998`, `max_abs_diff <= 0.0015`) and `GGUF` (`gguf>=0.19`) are exported to clean `bfloat16` `Qwen3_5ForCausalLM` checkpoints and scored through the exact same `PyTorch` probe and `vLLM` server; `W4A16-HGPTQ` and `W2.6A16-HGPTQ-RCO` run natively through their real quantized `compressed-tensors`/Marlin kernels.
+
 
 
