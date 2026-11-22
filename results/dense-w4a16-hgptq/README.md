@@ -165,7 +165,7 @@ Because the 9B/27B/35B ViT MLP has `intermediate_size = 4304 = 269 × 16`, the 2
 - **Flash-Next DFlash2 Speculative Drafter**: [`nchapman/Qwen3.8-Flash-Next-DFlash2-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-DFlash2-W4A16-HGPTQ) (`530.6 MiB` / `0.52 GiB`; see `dflash2-flash-next-probe.json`)
 - **35B-A3B (`MoE`)**: [`nchapman/Qwen3.6-35B-A3B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.6-35B-A3B-W4A16-HGPTQ) (`SHA256SUMS` digest: `cb98ab7a9b41ae09f81673181b7d1f61f1b96c756add13099a51af8745d6a778`; see `receipts/35b-g64-h64/hub-SHA256SUMS.txt`)
 
-See also [`blog-4bit-vs-8bit-and-gguf.md`](blog-4bit-vs-8bit-and-gguf.md) for the companion writeup comparing `HGPTQ-g64` against off-the-shelf 4-bit, mixed 4/8-bit (`RCO-15%`), and Unsloth `Q4_K_M` / `UD-Q4_K_XL` GGUFs.
+See also [`COMPARISON.md`](COMPARISON.md) for the full 7-arm `27B` & `9B` cross-format benchmark suite comparing `W4A16-HGPTQ` and `W2.6A16-HGPTQ-RCO` against `ExLlamaV3` (`EXL3`) and Unsloth Dynamic `GGUF` (`UD-Q4_K_XL` / `UD-Q2_K_XL`), and [`blog-4bit-vs-8bit-and-gguf.md`](blog-4bit-vs-8bit-and-gguf.md) for the companion writeup comparing `HGPTQ-g64` against off-the-shelf 4-bit, mixed 4/8-bit (`RCO-15%`), and Unsloth `Q4_K_M` / `UD-Q4_K_XL` GGUFs.
 
 ---
 
