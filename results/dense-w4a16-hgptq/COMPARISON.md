@@ -4,7 +4,7 @@ Controlled evaluation comparing `W4A16-HGPTQ` and `W2.6A16-HGPTQ-RCO` (`nchapman
 
 - **Machine-readable receipts (including 20,000-draw paired bootstrap CIs & per-domain KL)**:
   - `27B`: [`27b-g64-h64/probe_comparison.json`](27b-g64-h64/probe_comparison.json) · [`27b-g64-h64/evalscope_comparison.json`](27b-g64-h64/evalscope_comparison.json)
-  - `9B`: [`9b-g64-h64/probe_comparison.json`](9b-g64-h64/probe_comparison.json) · [`9b-g64-h64/evalscope_comparison.json`](9b-g64-h64/evalscope_comparison.json)
+  - `9B`: [`9b-g64-h64/probe_comparison.json`](9b-g64-h64/probe_comparison.json) · [`9b-g64-h64/evalscope_comparison.json`](9b-g64-h64/evalscope_comparison.json) · [`9b-g64-h64/sub3bit_diagnostic.json`](9b-g64-h64/sub3bit_diagnostic.json)
 - **Implementation**: [`src/warp_quant/comparison_runner.py`](../../src/warp_quant/comparison_runner.py) · [`scripts/run_comparison_suite.py`](../../scripts/run_comparison_suite.py) · [`tests/test_comparison_runner.py`](../../tests/test_comparison_runner.py)
 
 ---
@@ -104,6 +104,25 @@ Controlled evaluation comparing `W4A16-HGPTQ` and `W2.6A16-HGPTQ-RCO` (`nchapman
 | `w26_rco` vs `exl3_3bpw` | **`+24.03 pp [+19.78, +28.28]`** | **`+14.80 pp [+11.40, +18.40]`** | **`+17.68 pp [+9.76, +25.61]`** |
 | `w26_rco` vs `gguf_q2_k_xl` | **`+17.38 pp [+13.12, +21.63]`** | **`+5.00 pp [+1.40, +8.80]`** | `+7.93 pp [+0.00, +15.85]` |
 | `exl3_3bpw` vs `gguf_q2_k_xl` | **`-6.65 pp [-9.80, -3.51]`** | **`-9.80 pp [-12.80, -7.00]`** | **`-9.76 pp [-17.07, -2.44]`** |
+
+### Sub-3-Bit Root-Cause Diagnostic (`9B`: `EXL3 2.5bpw` + Pure-BF16 `W2.6` Control)
+
+Receipt: [`9b-g64-h64/sub3bit_diagnostic.json`](9b-g64-h64/sub3bit_diagnostic.json). To test whether the `W2.6A16-HGPTQ-RCO` (`2.86 bpw`) gap on `9B` is merely a raw bit-budget cliff below `3.0 bpw` or a vLLM W2 Marlin serving issue, we ran two targeted controls under the exact same `probe` + `vLLM` + `EvalScope` harness:
+1. **`TheMelonGod/Qwen3.5-9B-exl3` (`6hb-2.5bpw` @ `088957c48707`)**: **`2.03 GiB` (`2.52 bpw`)** text backbone — `0.34 bpw` (`12%`) **smaller** than `W2.6A16-HGPTQ-RCO` (GPU dequant verified on `layers.0.linear_attn.in_proj_qkv`: cosine `0.9999998`, max abs diff `0.000977`).
+2. **`W2.6A16-HGPTQ-RCO` BF16-dequantized control**: `nchapman/Qwen3.5-9B-W2.6A16-HGPTQ-RCO` decompressed & Hadamard-unrotated ($W_{\text{unrot}} = W_{\text{rot}} H_{64}$, verified cosine `0.999995`) into pure `bfloat16` weights and served via `vLLM` with **zero W2 Marlin kernels**.
+
+| 9B Sub-3.2 bpw Arm | Trunk (`bpw`) | `probe-v4` `w_kl` (`m_kl`) | **`probe-guard` `mean_kl`** ↓ | `IFEval` Prompt Strict | `MATH-500` Acc | `HumanEval+` Pass@1 | 3-Task Avg |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `exl3_3bpw` (`6hb-3.0bpw`) | `2.43 GiB` (`3.02`) | `0.1395` (`0.3708`) | `0.0685` | `84.10%` | `82.80%` | `78.66%` | `81.85%` |
+| **`exl3_2_5bpw` (`6hb-2.5bpw`)** | **`2.03 GiB` (`2.52`)** | `0.2516` (`0.5302`) | **`0.1725`** | **`81.89%`** | **`76.80%`** | **`71.34%`** | **`76.68%`** |
+| `gguf_q2_k_xl` (`UD-Q2_K_XL`) | `2.52 GiB` (`3.13`) | `0.2810` (`0.6090`) | `0.2011` | `77.45%` | `73.00%` | `68.90%` | `73.12%` |
+| `w26_rco` (native W2 Marlin) | `2.31 GiB` (`2.86`) | `0.2661` (`0.3431`) | `0.3642` | `60.07%` | `68.00%` | `60.98%` | `63.02%` |
+| `w26_rco_bf16_deq` (pure BF16 control) | `2.31 GiB` (`2.86`) | `0.2660` (`0.3431`) | `0.3640` | `59.15%` | `69.40%` | `58.54%` | `62.36%` |
+
+**Takeaways:**
+- **Not a bits problem:** `EXL3 2.5bpw` beats `W2.6A16-HGPTQ-RCO` by **`+13.66 pp` avg** (`+21.82 pp` IFEval, `+8.80 pp` MATH-500, `+10.36 pp` HumanEval+) and achieves **2.1× lower** held-out `probe-guard` KL (`0.1725` vs `0.3642`) while using **`0.34 bpw` fewer bits** (and beats `UD-Q2_K_XL` while using `0.61 bpw` fewer bits).
+- **Not a vLLM W2 Marlin bug:** The pure-BF16 dequantized control reproduces both the probe KL (`0.2660` / `0.3640`) and generative accuracy (`62.36%` vs `63.02%`) of native W2 Marlin serving, confirming the loss lives entirely in the quantized weights (`uint2b2` symmetric `{-2, -1, 0, +1}` grid on 70% of backbone linears + in-distribution QAT masking).
+- **`probe-guard` `mean_kl` is perfectly monotonic with generative accuracy** across all sub-3.2 bpw arms (`0.0685 → 81.85%`, `0.1725 → 76.68%`, `0.2011 → 73.12%`, `0.3642 → 63.02%`), whereas in-distribution `probe-v4` `mean_kl` (`0.3431` for `w26_rco` vs `0.5302` for `exl3_2_5bpw`) masks the degradation.
 
 ---
 
