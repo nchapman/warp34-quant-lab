@@ -1317,6 +1317,8 @@ def _patch_ct_w2a16() -> None:
             )
             # Ensure get_fused_moe_quant_config succeeds if called by MoERunner
             self.num_bits = 4
+            if hasattr(self, "wna16_backend") and getattr(self.wna16_backend, "name", "") == "HUMMING":
+                self.wna16_backend = type(self.wna16_backend).MARLIN
             return
         return orig_moe_process(self, layer)
 
