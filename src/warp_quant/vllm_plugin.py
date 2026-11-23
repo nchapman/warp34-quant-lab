@@ -1611,6 +1611,52 @@ def _install_subprocess_autoload() -> None:
         pass
 
 
+def _patch_qwen4_exp_lm_head() -> None:
+    """Propagate quant_config to Qwen4ExpForCausalLM.lm_head when W8 lm_head is present."""
+    try:
+        q4_mod = importlib.import_module("vllm.models.qwen4_exp.nvidia.model")
+        vpe_mod = importlib.import_module("vllm.model_executor.layers.vocab_parallel_embedding")
+        utils_mod = importlib.import_module("vllm.model_executor.models.utils")
+        Qwen4ExpForCausalLM = getattr(q4_mod, "Qwen4ExpForCausalLM", None)
+        ParallelLMHead = getattr(vpe_mod, "ParallelLMHead", None)
+        maybe_prefix = getattr(utils_mod, "maybe_prefix", None)
+        if Qwen4ExpForCausalLM is None or ParallelLMHead is None or maybe_prefix is None:
+            return
+    except Exception:
+        return
+
+    if getattr(Qwen4ExpForCausalLM.__init__, "_warp_quant_lm_head_patched", False):
+        return
+
+    orig_init = Qwen4ExpForCausalLM.__init__
+
+    def _patched_init(self: Any, *, vllm_config: Any, prefix: str = "") -> None:
+        orig_init(self, vllm_config=vllm_config, prefix=prefix)
+        quant_config = getattr(self, "quant_config", None)
+        lm_head = getattr(self, "lm_head", None)
+        if quant_config is None or not isinstance(lm_head, ParallelLMHead):
+            return
+        qm = getattr(lm_head, "quant_method", None)
+        if qm is not None and type(qm).__name__ != "UnquantizedEmbeddingMethod":
+            return
+        lm_prefix = maybe_prefix(prefix, "lm_head")
+        try:
+            probe_qm = quant_config.get_quant_method(lm_head, prefix=lm_prefix)
+        except Exception:
+            probe_qm = None
+        if probe_qm is None or type(probe_qm).__name__ == "UnquantizedEmbeddingMethod":
+            return
+        self.lm_head = ParallelLMHead(
+            self.config.vocab_size,
+            self.config.hidden_size,
+            quant_config=quant_config,
+            prefix=lm_prefix,
+        )
+
+    _patched_init._warp_quant_lm_head_patched = True  # type: ignore[attr-defined]
+    Qwen4ExpForCausalLM.__init__ = _patched_init
+
+
 def register() -> None:
     """Entry point for `vllm.general_plugins` and HF `auto_map` preload."""
     global _REGISTERED
@@ -1621,6 +1667,7 @@ def register() -> None:
     _patch_ct_moe_transform()
     _patch_ct_w2a16()
     _patch_qwen4_exp_ple_lut4()
+    _patch_qwen4_exp_lm_head()
 
 
 try:
