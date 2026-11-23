@@ -1,0 +1,6 @@
+{
+  "name": "qwen38-flash-next-w26-v2",
+  "ckpt": "/root/out/moe-flash-next-rco-v2/checkpoints/31pct_rco",
+  "vllm_ready_s": 188.09,
+  "smoke_reply": "391"
+}

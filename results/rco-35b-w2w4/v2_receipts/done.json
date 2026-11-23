@@ -1,0 +1,32 @@
+{
+  "name": "qwen36-35b-w26-v2",
+  "ckpt": "/root/out/moe-35b-rco-v2/checkpoints/30pct_rco",
+  "vllm_ready_s": 80.05,
+  "smoke_reply": "391",
+  "eval_elapsed_s": 180.18,
+  "summary": {
+    "humaneval_plus": {
+      "pass_at_1": 0.8841,
+      "num": 164,
+      "num_reviewed": 164,
+      "passed": 145
+    },
+    "ifeval": {
+      "prompt_strict": 0.8429,
+      "inst_strict": 0.8957,
+      "prompt_loose": 0.8743,
+      "inst_loose": 0.9161,
+      "num": 541,
+      "num_instructions": 834,
+      "num_reviewed": 541
+    },
+    "math_500": {
+      "accuracy": 0.856,
+      "num": 500,
+      "num_reviewed": 500,
+      "num_correct": 428,
+      "avg_output_tokens": 1016.1,
+      "truncated_at_max_tokens": 72
+    }
+  }
+}

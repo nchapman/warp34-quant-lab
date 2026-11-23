@@ -1,0 +1,32 @@
+{
+  "name": "qwen35-9b-w26-v2",
+  "ckpt": "/root/out/rco-9b-d1/checkpoints/37pct_rco",
+  "vllm_ready_s": 52.04,
+  "smoke_reply": "391",
+  "eval_elapsed_s": 1203.21,
+  "summary": {
+    "humaneval_plus": {
+      "pass_at_1": 0.7622,
+      "num": 164,
+      "num_reviewed": 164,
+      "passed": 125
+    },
+    "ifeval": {
+      "prompt_strict": 0.7579,
+      "inst_strict": 0.8285,
+      "prompt_loose": 0.7948,
+      "inst_loose": 0.8561,
+      "num": 541,
+      "num_instructions": 834,
+      "num_reviewed": 541
+    },
+    "math_500": {
+      "accuracy": 0.752,
+      "num": 500,
+      "num_reviewed": 500,
+      "num_correct": 376,
+      "avg_output_tokens": 996.4,
+      "truncated_at_max_tokens": 106
+    }
+  }
+}

@@ -240,19 +240,27 @@ def test_model_cards_match_published_receipts() -> None:
         ),
         (
             "results/rco-9b-w2w4/README-W2.6A16-HGPTQ-RCO.md",
-            "results/rco-9b-w2w4/probe_30pct_rco.json",
+            "results/rco-9b-w2w4/v2_receipts/probe_9b_w26_v2.json",
+        ),
+        (
+            "results/ornith-15-9b-w26a16-hgptq-rco/README.md",
+            "results/ornith-15-9b-w26a16-hgptq-rco/v2_receipts/probe_9b_ornith_w26_v2.json",
         ),
         (
             "results/rco-27b-w2w4/README-W2.6A16-HGPTQ-RCO.md",
-            "results/rco-27b-w2w4/probe_30pct_rco.json",
+            "results/rco-27b-w2w4/v2_receipts/probe_37pct_rco.json",
         ),
         (
             "results/rco-27b-w2w4/README-W2.2A16-HGPTQ-RCO.md",
-            "results/rco-27b-w2w4/probe_10pct_rco.json",
+            "results/rco-27b-w2w4/v2_receipts/probe_16pct_rco.json",
         ),
         (
             "results/rco-35b-w2w4/README-W2.6A16-HGPTQ-RCO.md",
-            "results/rco-35b-w2w4/probe_25pct_rco.json",
+            "results/rco-35b-w2w4/v2_receipts/probe_35b_w26_v2.json",
+        ),
+        (
+            "results/ornith-15-35b-a3b-w26a16-hgptq-rco/README.md",
+            "results/ornith-15-35b-a3b-w26a16-hgptq-rco/v2_receipts/probe_35b_ornith_w26_v2.json",
         ),
         (
             "results/qwen38-flash-next-w4a16-hgptq/README.md",
@@ -260,7 +268,7 @@ def test_model_cards_match_published_receipts() -> None:
         ),
         (
             "results/qwen38-flash-next-w26a16-hgptq-rco/README.md",
-            "results/qwen38-flash-next-w26a16-hgptq-rco/probe_results.json",
+            "results/qwen38-flash-next-w26a16-hgptq-rco/v2_receipts/probe_flash_next_w26_v2.json",
         ),
     ]
     for md_rel, json_rel in pairs:

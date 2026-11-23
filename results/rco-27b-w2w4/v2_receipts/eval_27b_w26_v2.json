@@ -1,0 +1,32 @@
+{
+  "name": "qwen38-27b-w26-v2",
+  "ckpt": "/root/out/rco-27b-d1/checkpoints/37pct_rco",
+  "vllm_ready_s": 150.07,
+  "smoke_reply": "391",
+  "eval_elapsed_s": 3830.79,
+  "summary": {
+    "humaneval_plus": {
+      "pass_at_1": 0.8902,
+      "num": 164,
+      "num_reviewed": 164,
+      "passed": 146
+    },
+    "ifeval": {
+      "prompt_strict": 0.7819,
+      "inst_strict": 0.8417,
+      "prompt_loose": 0.8133,
+      "inst_loose": 0.8669,
+      "num": 541,
+      "num_instructions": 834,
+      "num_reviewed": 541
+    },
+    "math_500": {
+      "accuracy": 0.814,
+      "num": 500,
+      "num_reviewed": 500,
+      "num_correct": 407,
+      "avg_output_tokens": 937.8,
+      "truncated_at_max_tokens": 84
+    }
+  }
+}

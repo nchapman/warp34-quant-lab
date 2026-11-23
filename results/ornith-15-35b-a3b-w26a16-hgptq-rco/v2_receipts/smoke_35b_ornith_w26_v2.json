@@ -1,0 +1,6 @@
+{
+  "name": "ornith-15-35b-w26-v2",
+  "ckpt": "/root/out/moe-35b-ornith-rco-v2/checkpoints/30pct_rco",
+  "vllm_ready_s": 92.09,
+  "smoke_reply": "391"
+}

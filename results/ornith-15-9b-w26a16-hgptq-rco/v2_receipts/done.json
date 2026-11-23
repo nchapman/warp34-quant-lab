@@ -1,0 +1,6 @@
+{
+  "name": "ornith-15-9b-w26-v2",
+  "ckpt": "/root/out/rco-9b-ornith-d1/checkpoints/37pct_rco",
+  "vllm_ready_s": 52.04,
+  "smoke_reply": "391"
+}
