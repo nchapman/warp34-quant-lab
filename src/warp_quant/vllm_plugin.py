@@ -1655,6 +1655,36 @@ def _patch_qwen4_exp_lm_head() -> None:
     Qwen4ExpForCausalLM.__init__ = _patched_init
 
 
+def _patch_humming_linear_k_div32() -> None:
+    """Reject HummingLinearKernel when K is not divisible by 32 (e.g. Qwen VL linear_fc2 K=4304).
+
+    `humming::unpack_weight` asserts `packed_cols % num_bits == 0` (i.e. `K % 32 == 0`).
+    When Humming is installed in vLLM 0.34+, its `can_implement` omits this check,
+    causing startup failures on Vision `linear_fc2` (`K=4304`, `538 % 4 != 0`).
+    """
+    try:
+        hum_mod = importlib.import_module("vllm.model_executor.kernels.linear.mixed_precision.humming")
+        HummingLinearKernel = getattr(hum_mod, "HummingLinearKernel", None)
+        if HummingLinearKernel is None:
+            return
+    except Exception:
+        return
+
+    orig_can_impl = HummingLinearKernel.can_implement.__func__
+    if getattr(orig_can_impl, "_warp_quant_k32_patched", False):
+        return
+
+    @classmethod
+    def _patched_can_implement(cls: Any, c: Any) -> tuple[bool, str | None]:
+        k_size = c.partition_weight_shape[0]
+        if k_size % 32 != 0:
+            return False, f"Humming requires K % 32 == 0, got K={k_size}"
+        return orig_can_impl(cls, c)
+
+    _patched_can_implement.__func__._warp_quant_k32_patched = True  # type: ignore[attr-defined]
+    HummingLinearKernel.can_implement = _patched_can_implement
+
+
 def register() -> None:
     """Entry point for `vllm.general_plugins` and HF `auto_map` preload."""
     global _REGISTERED
@@ -1666,6 +1696,7 @@ def register() -> None:
     _patch_ct_w2a16()
     _patch_qwen4_exp_ple_lut4()
     _patch_qwen4_exp_lm_head()
+    _patch_humming_linear_k_div32()
 
 
 try:
