@@ -219,8 +219,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument(
         "--options",
         nargs="+",
-        default=["w2_g64", "w4_g64"],
-        help="Ordered QuantOption names (e.g. w2_g64 w4_g64 or w2_g128 w4_g64 w8_g64)",
+        default=["w2_g64_sym", "w4_g64"],
+        help="Ordered QuantOption names (e.g. w2_g64_sym w4_g64 or w2_g128_sym w4_g128 with --hadamard-block-size 512)",
     )
     r.add_argument(
         "--budgets",
@@ -269,6 +269,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=512,
         help="Number of non-overlapping calibration sequences for E2E Scale+Norm KL tuning",
+    )
+    r.add_argument(
+        "--scale-qat-train-norms",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Jointly tune FP32-master RMSNorms and GDN gates anchored to clean BF16 during per-allocation Scale QAT (pass --no-scale-qat-train-norms for pure W2 scale-only polish)",
     )
     r.add_argument(
         "--assemble",

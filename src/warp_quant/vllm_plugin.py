@@ -38,13 +38,37 @@ import torch
 _REGISTERED = False
 
 
-def repack_uint2b2_to_uint4b8(packed_w2: torch.Tensor) -> torch.Tensor:
+def _extract_w2_code_offset(obj: Any) -> float:
+    """Extract optional symmetric half-integer `code_offset` from a CT scheme or weight_quant config."""
+    candidates = [obj]
+    for attr in ("config", "weight_quant", "weights"):
+        sub = getattr(obj, attr, None)
+        if sub is not None:
+            candidates.append(sub)
+    for cand in candidates:
+        obs_kw = getattr(cand, "observer_kwargs", None)
+        if isinstance(obs_kw, dict) and "code_offset" in obs_kw and obs_kw["code_offset"] is not None:
+            val = float(obs_kw["code_offset"])
+            if not math.isfinite(val) or val not in (0.0, 0.5):
+                raise ValueError(f"Invalid W2 code_offset={val} in observer_kwargs (expected 0.0 or 0.5)")
+            return val
+    return 0.0
+
+
+def repack_uint2b2_to_uint4b8(packed_w2: torch.Tensor, *, code_offset: float = 0.0) -> torch.Tensor:
     """Losslessly expand packed `uint2b2` (`[..., K // 16]` int32, bias=2) into
     packed `uint4b8` (`[..., K // 8]` int32, bias=8) via 4-step SWAR bit dilation.
 
-    For every 2-bit code `u2 in {0, 1, 2, 3}` (representing signed `q = u2 - 2`),
-    the corresponding 4-bit `uint4b8` code is `u4 = q + 8 = u2 + 6 in {6, 7, 8, 9}`.
+    - `code_offset == 0.0` (`q = u2 - 2 in {-2, -1, 0, +1}`):
+      maps `u2 -> u4 = u2 + 6 in {6, 7, 8, 9}` (scale unchanged).
+    - `code_offset == 0.5` (`q = u2 - 1.5 in {-1.5, -0.5, +0.5, +1.5}`):
+      uses `(u2 - 1.5) * s = ((2*u2 + 5) - 8) * (s / 2)`, mapping
+      `u2 -> u4 = 2*u2 + 5 in {5, 7, 9, 11}` (caller must halve `weight_scale`).
     """
+    if code_offset not in (0.0, 0.5):
+        raise ValueError(
+            f"Unsupported code_offset={code_offset} for uint2b2 -> uint4b8 Marlin repack; expected 0.0 or 0.5"
+        )
     lo = packed_w2 & 0xFFFF
     hi = (packed_w2 >> 16) & 0xFFFF
     out = []
@@ -52,7 +76,10 @@ def repack_uint2b2_to_uint4b8(packed_w2: torch.Tensor) -> torch.Tensor:
         x = (x | (x << 8)) & 0x00FF00FF
         x = (x | (x << 4)) & 0x0F0F0F0F
         x = (x | (x << 2)) & 0x33333333
-        x = x + 0x66666666
+        if code_offset == 0.5:
+            x = (x << 1) + 0x55555555
+        else:
+            x = x + 0x66666666
         out.append(x.to(torch.int32))
     return torch.stack(out, dim=-1).flatten(-2, -1)
 
@@ -62,14 +89,23 @@ def unpack_dequant_uint2b2(
     scale: torch.Tensor,
     group_size: int = 64,
     out_dtype: torch.dtype = torch.bfloat16,
+    *,
+    code_offset: float = 0.0,
 ) -> torch.Tensor:
     """Unpack and dequantize `uint2b2` `[..., N, K // 16]` int32 with `scale` `[..., N, K // G]`."""
+    if not math.isfinite(code_offset) or code_offset not in (0.0, 0.5):
+        raise ValueError(
+            f"Unsupported code_offset={code_offset} for uint2b2 dequantization; expected 0.0 or 0.5"
+        )
     orig_prefix = packed_w2.shape[:-1]
     k_packed = packed_w2.shape[-1]
     k_full = k_packed * 16
     shifts = torch.arange(0, 32, 2, device=packed_w2.device, dtype=torch.int32)
     codes = ((packed_w2.unsqueeze(-1) >> shifts) & 0x3).to(torch.int8) - 2
-    q = codes.reshape(*orig_prefix, k_full).to(out_dtype)
+    if code_offset != 0.0:
+        q = (codes.reshape(*orig_prefix, k_full).to(torch.float32) + float(code_offset)).to(out_dtype)
+    else:
+        q = codes.reshape(*orig_prefix, k_full).to(out_dtype)
     if group_size > 0 and scale.shape[-1] * group_size == k_full:
         q = (q.unflatten(-1, (scale.shape[-1], group_size)) * scale.to(out_dtype).unsqueeze(-1)).flatten(
             -2, -1
@@ -878,7 +914,8 @@ def _patch_ct_w2a16() -> None:
         *args: Any,
         **kwargs: Any,
     ) -> None:
-        if self.num_bits != 2 or has_humming():
+        code_offset = _extract_w2_code_offset(self) if self.num_bits == 2 else 0.0
+        if self.num_bits != 2 or (has_humming() and code_offset == 0.0):
             return orig_linear_create(self, layer, *args, **kwargs)
 
         bound = orig_linear_sig.bind_partial(self, layer, *args, **kwargs)
@@ -895,7 +932,7 @@ def _patch_ct_w2a16() -> None:
         weight_loader = b_args.get("weight_loader") or extra_kw["weight_loader"]
 
         repack_to_marlin = os.environ.get("VLLM_WARP_QUANT_W2_MARLIN", "0") == "1"
-        if repack_to_marlin:
+        if repack_to_marlin and code_offset in (0.0, 0.5):
             # Initialize Marlin kernel for uint4b8, then allocate 2-bit weight_packed for loading
             self.num_bits = 4
             self.pack_factor = Fraction(32, 4)
@@ -919,6 +956,7 @@ def _patch_ct_w2a16() -> None:
             )
             layer.register_parameter("weight_packed", qweight)
             layer._warp_quant_w2_mode = "marlin_repack"
+            layer._warp_quant_w2_code_offset = code_offset
             return
 
         # Default: keep weights in true 2-bit [N, K // 16] int32 in GPU VRAM
@@ -973,12 +1011,18 @@ def _patch_ct_w2a16() -> None:
             )
             layer.register_parameter("weight_zero_point", qzeros)
         layer._warp_quant_w2_mode = "native_2bit"
+        layer._warp_quant_w2_code_offset = code_offset
 
     def _linear_process_weights(self: Any, layer: torch.nn.Module) -> None:
         mode = getattr(layer, "_warp_quant_w2_mode", None)
+        code_offset = float(getattr(layer, "_warp_quant_w2_code_offset", 0.0))
         if mode == "marlin_repack":
-            w4 = repack_uint2b2_to_uint4b8(layer.weight_packed.data)
+            w4 = repack_uint2b2_to_uint4b8(layer.weight_packed.data, code_offset=code_offset)
             layer.weight_packed = torch.nn.Parameter(w4, requires_grad=False)
+            if code_offset == 0.5:
+                layer.weight_scale = torch.nn.Parameter(
+                    (layer.weight_scale.data * 0.5).contiguous(), requires_grad=False
+                )
             self.num_bits = 4
             self.pack_factor = Fraction(32, 4)
             self.quant_type = scalar_types.uint4b8
@@ -1007,11 +1051,13 @@ def _patch_ct_w2a16() -> None:
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if getattr(layer, "_warp_quant_w2_mode", None) == "native_2bit":
+            code_offset = float(getattr(layer, "_warp_quant_w2_code_offset", 0.0))
             w_dq = unpack_dequant_uint2b2(
                 layer.weight_packed,
                 layer.weight_scale,
                 group_size=self.group_size,
                 out_dtype=x.dtype,
+                code_offset=code_offset,
             )
             return torch.nn.functional.linear(x, w_dq, bias)
         return orig_linear_apply(self, layer, x, bias)
@@ -1078,11 +1124,13 @@ def _patch_ct_w2a16() -> None:
 
             w13_p = layer.w13_weight_packed[e].t() if is_transposed else layer.w13_weight_packed[e]
             w13_s = layer.w13_weight_scale[e].t() if is_transposed else layer.w13_weight_scale[e]
+            code_offset = float(getattr(layer, "_warp_quant_w2_code_offset", 0.0))
             w13_dq = unpack_dequant_uint2b2(
                 w13_p,
                 w13_s,
                 group_size=group_size,
                 out_dtype=x_flat.dtype,
+                code_offset=code_offset,
             )
             gate_up = torch.nn.functional.linear(inp, w13_dq)
             inter_dim = gate_up.shape[-1] // 2
@@ -1097,6 +1145,7 @@ def _patch_ct_w2a16() -> None:
                 w2_s,
                 group_size=group_size,
                 out_dtype=x_flat.dtype,
+                code_offset=code_offset,
             )
             down = torch.nn.functional.linear(act, w2_dq)
             down = down * flat_weights.index_select(0, sel).unsqueeze(-1)
@@ -1117,22 +1166,28 @@ def _patch_ct_w2a16() -> None:
             # First signature: (weight_quant, input_quant, moe, ...)
             weight_quant = first_arg
             if getattr(weight_quant, "num_bits", None) == 2:
-                try:
-                    orig_moe_init(self, *args, **kwargs)
-                    return
-                except (ValueError, NotImplementedError, KeyError, AssertionError):
-                    patched_wq = weight_quant.model_copy(update={"num_bits": 4})
-                    new_args = (patched_wq, *args[1:]) if args else ()
-                    new_kwargs = dict(kwargs)
-                    if not args and "weight_quant" in new_kwargs:
-                        new_kwargs["weight_quant"] = patched_wq
-                    orig_moe_init(self, *new_args, **new_kwargs)
-                    self.num_bits = 2
-                    self.packed_factor = Fraction(32, 2)
-                    self.quant_type = scalar_types.uint2b2
-                    repack_to_marlin = os.environ.get("VLLM_WARP_QUANT_W2_MARLIN", "0") == "1"
-                    self._warp_quant_w2_moe_mode = "marlin_repack" if repack_to_marlin else "native_2bit"
-                    return
+                code_offset = _extract_w2_code_offset(weight_quant)
+                if code_offset == 0.0:
+                    try:
+                        orig_moe_init(self, *args, **kwargs)
+                        return
+                    except (ValueError, NotImplementedError, KeyError, AssertionError):
+                        pass
+                patched_wq = weight_quant.model_copy(update={"num_bits": 4})
+                new_args = (patched_wq, *args[1:]) if args else ()
+                new_kwargs = dict(kwargs)
+                if not args and "weight_quant" in new_kwargs:
+                    new_kwargs["weight_quant"] = patched_wq
+                orig_moe_init(self, *new_args, **new_kwargs)
+                self.num_bits = 2
+                self.packed_factor = Fraction(32, 2)
+                self.quant_type = scalar_types.uint2b2
+                repack_to_marlin = os.environ.get("VLLM_WARP_QUANT_W2_MARLIN", "0") == "1"
+                self._warp_quant_w2_moe_mode = (
+                    "marlin_repack" if (repack_to_marlin and code_offset in (0.0, 0.5)) else "native_2bit"
+                )
+                self._warp_quant_w2_code_offset = code_offset
+                return
             orig_moe_init(self, *args, **kwargs)
             return
 
@@ -1142,7 +1197,12 @@ def _patch_ct_w2a16() -> None:
         scheme_map = getattr(quant_config, "target_scheme_map", None) or {}
         eff_lqc = layer_quant_config if layer_quant_config is not None else scheme_map.get("Linear")
         weight_quant = eff_lqc.get("weights") if isinstance(eff_lqc, dict) else None
-        if weight_quant is not None and getattr(weight_quant, "num_bits", None) == 2 and not has_humming():
+        code_offset = _extract_w2_code_offset(weight_quant) if weight_quant is not None else 0.0
+        if (
+            weight_quant is not None
+            and getattr(weight_quant, "num_bits", None) == 2
+            and (not has_humming() or code_offset != 0.0)
+        ):
             patched_wq = weight_quant.model_copy(update={"num_bits": 4})
             patched_lqc = dict(eff_lqc)
             patched_lqc["weights"] = patched_wq
@@ -1151,7 +1211,10 @@ def _patch_ct_w2a16() -> None:
             self.packed_factor = Fraction(32, 2)
             self.quant_type = scalar_types.uint2b2
             repack_to_marlin = os.environ.get("VLLM_WARP_QUANT_W2_MARLIN", "0") == "1"
-            self._warp_quant_w2_moe_mode = "marlin_repack" if repack_to_marlin else "native_2bit"
+            self._warp_quant_w2_moe_mode = (
+                "marlin_repack" if (repack_to_marlin and code_offset in (0.0, 0.5)) else "native_2bit"
+            )
+            self._warp_quant_w2_code_offset = code_offset
             return
         orig_moe_init(self, quant_config, moe, layer_quant_config=layer_quant_config)
 
@@ -1166,9 +1229,11 @@ def _patch_ct_w2a16() -> None:
         if mode is not None:
             layer._warp_quant_w2_moe_mode = mode
             layer._warp_quant_w2_group_size = self.group_size
+            layer._warp_quant_w2_code_offset = float(getattr(self, "_warp_quant_w2_code_offset", 0.0))
 
     def _moe_process_weights(self: Any, layer: torch.nn.Module) -> None:
         mode = getattr(self, "_warp_quant_w2_moe_mode", None)
+        code_offset = float(getattr(self, "_warp_quant_w2_code_offset", 0.0))
         if mode == "marlin_repack":
             is_transposed = bool(
                 getattr(layer.w13_weight_packed, "is_transposed", False)
@@ -1178,20 +1243,27 @@ def _patch_ct_w2a16() -> None:
             w2_data = layer.w2_weight_packed.data
             if is_transposed:
                 w13_repacked = (
-                    repack_uint2b2_to_uint4b8(w13_data.transpose(1, 2).contiguous())
+                    repack_uint2b2_to_uint4b8(w13_data.transpose(1, 2).contiguous(), code_offset=code_offset)
                     .transpose(1, 2)
                     .contiguous()
                 )
                 w2_repacked = (
-                    repack_uint2b2_to_uint4b8(w2_data.transpose(1, 2).contiguous())
+                    repack_uint2b2_to_uint4b8(w2_data.transpose(1, 2).contiguous(), code_offset=code_offset)
                     .transpose(1, 2)
                     .contiguous()
                 )
             else:
-                w13_repacked = repack_uint2b2_to_uint4b8(w13_data)
-                w2_repacked = repack_uint2b2_to_uint4b8(w2_data)
+                w13_repacked = repack_uint2b2_to_uint4b8(w13_data, code_offset=code_offset)
+                w2_repacked = repack_uint2b2_to_uint4b8(w2_data, code_offset=code_offset)
             layer.w13_weight_packed = torch.nn.Parameter(w13_repacked, requires_grad=False)
             layer.w2_weight_packed = torch.nn.Parameter(w2_repacked, requires_grad=False)
+            if code_offset == 0.5:
+                layer.w13_weight_scale = torch.nn.Parameter(
+                    (layer.w13_weight_scale.data * 0.5).contiguous(), requires_grad=False
+                )
+                layer.w2_weight_scale = torch.nn.Parameter(
+                    (layer.w2_weight_scale.data * 0.5).contiguous(), requires_grad=False
+                )
             self.num_bits = 4
             self.packed_factor = Fraction(32, 4)
             self.quant_type = scalar_types.uint4b8

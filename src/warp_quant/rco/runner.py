@@ -595,17 +595,14 @@ def run_rco_cli(args: argparse.Namespace) -> None:
                     st = torch.load(state_file, map_location="cpu", weights_only=True)
                 else:
                     is_all_high = name == "all_high"
+                    # Always restore clean BF16 norms/GDN-gates before per-allocation QAT so
+                    # FP32-master anchor_wd pulls toward clean BF16 rather than all_low's
+                    # distorted All-W2 norms (-0.0211 probe-guard KL on 9B).
                     with torch.no_grad():
                         for full_k, orig_w in clean_bf16_backup.items():
                             mod = model.get_submodule(full_k[:-7])
                             mod.weight.copy_(orig_w.to(device=mod.weight.device, dtype=mod.weight.dtype))
-                        if not is_all_high and low_st_cached is not None:
-                            for full_k, new_w in low_st_cached["bf16_overrides"].items():
-                                if full_k.endswith(".weight"):
-                                    mod = model.get_submodule(full_k[:-7])
-                                    mod.weight.copy_(
-                                        new_w.to(device=mod.weight.device, dtype=mod.weight.dtype)
-                                    )
+                    want_norms = bool(getattr(args, "scale_qat_train_norms", True))
                     n_qat = 512 if is_all_high else 384
                     st = run_e2e_scale_qat(
                         model,
@@ -621,12 +618,12 @@ def run_rco_cli(args: argparse.Namespace) -> None:
                         ),
                         num_epochs=1,
                         batch_size=4,
-                        lr=0.0 if is_all_high else 8e-5,
-                        norm_lr=1.2e-4,
+                        lr=0.0 if is_all_high else 1.2e-4,
+                        norm_lr=1.5e-4,
                         anchor_wd=0.04,
                         train_scales_max_bits=2,
-                        train_norms=True,
-                        train_gdn_gates=not is_all_high,
+                        train_norms=want_norms,
+                        train_gdn_gates=want_norms and (not is_all_high),
                         seed=args.seed,
                     )
                     torch.save(st, state_file)

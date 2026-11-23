@@ -112,6 +112,12 @@ def build_rco_quantization_config(
         t_list = targets_by_opt[opt_idx]
         if not t_list:
             continue
+        code_offset = float(opt.get("code_offset", 0.0))
+        if code_offset not in (0.0, 0.5):
+            raise ValueError(
+                f"Unsupported code_offset={code_offset} for option '{opt['name']}'; expected 0.0 or 0.5"
+            )
+        observer_kwargs = {"code_offset": code_offset} if code_offset != 0.0 else {}
         config_groups[opt["name"]] = {
             "format": "pack-quantized",
             "input_activations": None,
@@ -124,7 +130,7 @@ def build_rco_quantization_config(
                 "group_size": int(opt["group_size"]),
                 "num_bits": int(opt["num_bits"]),
                 "observer": "minmax",
-                "observer_kwargs": {},
+                "observer_kwargs": observer_kwargs,
                 "scale_dtype": None,
                 "strategy": "group",
                 "symmetric": True,

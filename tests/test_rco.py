@@ -185,6 +185,59 @@ def test_build_rco_quantization_config_unanchored_regexes():
         r"re:.*(?<!mtp\.)layers\.0\.self_attn\.q_proj$",
         r"re:.*(?<!mtp\.)layers\.0\.self_attn\.k_proj$",
     ]
+    assert qcfg["config_groups"]["w2_g64"]["weights"]["observer_kwargs"] == {}
+
+
+def test_build_rco_quantization_config_stamps_code_offset_and_validates():
+    from compressed_tensors.quantization import QuantizationArgs
+
+    manifest = {
+        "options": [
+            {"name": "w2_g128_sym", "num_bits": 2, "group_size": 128, "code_offset": 0.5},
+            {"name": "w4_g128", "num_bits": 4, "group_size": 128, "code_offset": 0.0},
+        ],
+        "hadamard_block_size": 512,
+        "groups": [
+            {"name": "l0_attn", "members": ["model.language_model.layers.0.self_attn.q_proj"]},
+            {"name": "l0_mlp", "members": ["model.language_model.layers.0.mlp.down_proj"]},
+        ],
+    }
+    qcfg = build_rco_quantization_config(
+        {},
+        manifest,
+        choices=[0, 1],
+        quantize_mtp=False,
+        quantize_vision=False,
+        quantize_lm_head_w8=False,
+    )
+    w2_weights = qcfg["config_groups"]["w2_g128_sym"]["weights"]
+    w4_weights = qcfg["config_groups"]["w4_g128"]["weights"]
+    assert w2_weights["observer_kwargs"] == {"code_offset": 0.5}
+    assert w4_weights["observer_kwargs"] == {}
+    assert qcfg["transform_config"]["config_groups"]["v"]["head_dim"] == 512
+    # Must validate cleanly under compressed-tensors QuantizationArgs
+    assert QuantizationArgs(**w2_weights).observer_kwargs == {"code_offset": 0.5}
+    assert QuantizationArgs(**w4_weights).observer_kwargs == {}
+
+    # Reject unsupported code_offset before stamping
+    bad_manifest = {
+        **manifest,
+        "options": [
+            {"name": "w2_bad", "num_bits": 2, "group_size": 128, "code_offset": 0.25},
+            manifest["options"][1],
+        ],
+    }
+    import pytest
+
+    with pytest.raises(ValueError, match="Unsupported code_offset"):
+        build_rco_quantization_config(
+            {},
+            bad_manifest,
+            choices=[0, 1],
+            quantize_mtp=False,
+            quantize_vision=False,
+            quantize_lm_head_w8=False,
+        )
 
 
 def test_refine_hessian_cd_monotonically_decreases_objective() -> None:

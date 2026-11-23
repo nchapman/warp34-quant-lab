@@ -4,7 +4,7 @@ Controlled evaluation comparing `W4A16-HGPTQ` and `W2.6A16-HGPTQ-RCO` (`nchapman
 
 - **Machine-readable receipts (including 20,000-draw paired bootstrap CIs & per-domain KL)**:
   - `27B`: [`27b-g64-h64/probe_comparison.json`](27b-g64-h64/probe_comparison.json) · [`27b-g64-h64/evalscope_comparison.json`](27b-g64-h64/evalscope_comparison.json)
-  - `9B`: [`9b-g64-h64/probe_comparison.json`](9b-g64-h64/probe_comparison.json) · [`9b-g64-h64/evalscope_comparison.json`](9b-g64-h64/evalscope_comparison.json) · [`9b-g64-h64/sub3bit_diagnostic.json`](9b-g64-h64/sub3bit_diagnostic.json)
+  - `9B`: [`9b-g64-h64/probe_comparison.json`](9b-g64-h64/probe_comparison.json) · [`9b-g64-h64/evalscope_comparison.json`](9b-g64-h64/evalscope_comparison.json) · [`9b-g64-h64/sub3bit_diagnostic.json`](9b-g64-h64/sub3bit_diagnostic.json) · [`9b-g64-h64/sub3bit_ablation.json`](9b-g64-h64/sub3bit_ablation.json)
 - **Implementation**: [`src/warp_quant/comparison_runner.py`](../../src/warp_quant/comparison_runner.py) · [`scripts/run_comparison_suite.py`](../../scripts/run_comparison_suite.py) · [`tests/test_comparison_runner.py`](../../tests/test_comparison_runner.py)
 
 ---
@@ -123,6 +123,23 @@ Receipt: [`9b-g64-h64/sub3bit_diagnostic.json`](9b-g64-h64/sub3bit_diagnostic.js
 - **Not a bits problem:** `EXL3 2.5bpw` beats `W2.6A16-HGPTQ-RCO` by **`+13.66 pp` avg** (`+21.82 pp` IFEval, `+8.80 pp` MATH-500, `+10.36 pp` HumanEval+) and achieves **2.1× lower** held-out `probe-guard` KL (`0.1725` vs `0.3642`) while using **`0.34 bpw` fewer bits** (and beats `UD-Q2_K_XL` while using `0.61 bpw` fewer bits).
 - **Not a vLLM W2 Marlin bug:** The pure-BF16 dequantized control reproduces both the probe KL (`0.2660` / `0.3640`) and generative accuracy (`62.36%` vs `63.02%`) of native W2 Marlin serving, confirming the loss lives entirely in the quantized weights (`uint2b2` symmetric `{-2, -1, 0, +1}` grid on 70% of backbone linears + in-distribution QAT masking).
 - **`probe-guard` `mean_kl` is perfectly monotonic with generative accuracy** across all sub-3.2 bpw arms (`0.0685 → 81.85%`, `0.1725 → 76.68%`, `0.2011 → 73.12%`, `0.3642 → 63.02%`), whereas in-distribution `probe-v4` `mean_kl` (`0.3431` for `w26_rco` vs `0.5302` for `exl3_2_5bpw`) masks the degradation.
+
+### Sub-3-Bit 2/4/8-Bit Ablation & Recovery (`9B` @ `2.85–2.86 bpw`, No 3-Bit)
+
+Receipt: [`9b-g64-h64/sub3bit_ablation.json`](9b-g64-h64/sub3bit_ablation.json). Staying strictly within `2 / 4 / 8`-bit Marlin/Humming serving (no 3-bit kernels), we ran a 25-arm ablation on `Qwen/Qwen3.5-9B` at the exact `2.85–2.86 bpw` text-backbone budget isolating (a) `w2_*_sym` (`code_offset=0.5`, `{-1.5, -0.5, +0.5, +1.5}` — lossless `uint4b8` Marlin repack via `u4 = 2*u2 + 5 ∈ {5,7,9,11}` with `scale / 2`), (b) fixing a bug in `src/warp_quant/rco/runner.py` that anchored per-budget QAT norms to `all_low`'s distorted All-W2 norms instead of clean BF16 (`-0.0211` free `probe-guard` KL), (c) trading scale overhead (`g64 → g128`) plus larger Hadamard rotation (`H_64 → H_512`) to fund `+12` more `W4` groups (`48 → 60 / 128` = `36.75% W4`) at the identical `2.86 bpw`, and (d) QAT / LSQ / mixed-data variants.
+
+| 9B Sub-3.2 bpw Arm (`2/4/8`-bit or Reference) | Trunk (`bpw`) | `probe-guard` `mean_kl` ↓ | `IFEval` Prompt Strict | `MATH-500` Acc | `HumanEval+` Pass@1 | 3-Task Avg |
+|---|---:|---:|---:|---:|---:|---:|
+| `exl3_2_5bpw` (`6hb-2.5bpw`, trellis ref) | `2.03 GiB` (`2.52`) | `0.1725` | `81.89%` | `76.80%` | `71.34%` | `76.68%` |
+| **`D1` (`w2_g128_sym` + `w4_g128` + `H_512` + `36.75% W4` + clean QAT)** | **`2.31 GiB` (`2.86`)** | **`0.2935`** | **`79.67%`** | **`74.20%`** | **`70.12%`** | **`74.66%`** |
+| `gguf_q2_k_xl` (`UD-Q2_K_XL`, mixed `Q2/Q3/Q4`) | `2.52 GiB` (`3.13`) | `0.2011` | `77.45%` | `73.00%` | `68.90%` | `73.12%` |
+| **`Q1` (`w2_g64_sym` + `w4_g64` + `H_64` + `30% W4` + clean `W2` scale-only)** | **`2.30 GiB` (`2.85`)** | `0.3118` | `73.94%` | `71.60%` | `67.68%` | `71.07%` |
+| `w26_rco` (shipping `w2_g64` + `H_64`, `all_low`-anchored QAT) | `2.31 GiB` (`2.86`) | `0.3642` | `60.07%` | `68.00%` | `60.98%` | `63.02%` |
+
+**Key findings from the 25-arm ablation:**
+- **`D1` (`w2_g128_sym` + `w4_g128` + `H_512`, `36.75% W4`, `2.86 bpw`) gains `+11.64 pp` avg over shipping `W2.6A16-HGPTQ-RCO` (`63.02% → 74.66%`) and beats Unsloth `UD-Q2_K_XL` (`73.12%` @ `3.13 bpw`) on ALL 3 benchmarks** (`+2.22 pp` IFEval, `+1.20 pp` MATH-500, `+1.22 pp` HumanEval+) while using `0.27 bpw` fewer bits and staying 100% Marlin-native (`g128`, `H_512`, lossless `uint4b8` repack).
+- **Drop-in `g64-h64` (`Q1`) gains `+8.05 pp` avg (`63.02% → 71.07%`)** from `w2_g64_sym` (`-35.7%` All-W2 `probe-guard` KL: `1.2467 → 0.8020`) + clean-BF16 anchoring + `W2` scale-only polish (`85s` on 1× H200).
+- **Ruled-out dead ends:** `actorder="static"` (`diag(H)`) lost to `actorder="weight"` (`0.3277` vs `0.3191` `probe-guard` KL); unlocking `W4` scales during `scale_qat` destabilized `val_kl` (`0.259 → 0.35–0.47`); mixing raw unformatted `FineWeb-Edu` hurt chat-formatted `probe-guard` (`0.3535` vs `0.3118`); short-horizon (`<1M` tok) `W2` LSQ code-flipping overfit `train_kl` (`0.071`) while regressing `val_kl`.
 
 ---
 

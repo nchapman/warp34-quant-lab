@@ -16,6 +16,7 @@ from warp_quant.hadamard_gptq import _hadamard_rotate_weight
 from warp_quant.streaming_moe import dequantize_ple_rows_lut4
 from warp_quant.vllm_plugin import (
     CustomLut4PLEMethod,
+    _extract_w2_code_offset,
     _patch_ct_linear_transform,
     _patch_qwen4_exp_ple_lut4,
     fast_block_hadamard,
@@ -38,6 +39,27 @@ def test_repack_uint2b2_to_uint4b8_2d_and_3d() -> None:
         assert torch.equal(unpacked.to(torch.int8), q_int)
 
 
+def test_repack_uint2b2_to_uint4b8_code_offset_half_bit_exact() -> None:
+    torch.manual_seed(123)
+    for shape in ((64, 128), (4, 32, 64)):
+        q_int = torch.randint(-2, 2, shape, dtype=torch.int8)
+        w2_packed = pack_to_int32(q_int, num_bits=2)
+        w4_sym = repack_uint2b2_to_uint4b8(w2_packed, code_offset=0.5)
+        unpacked_signed = unpack_from_int32(w4_sym, 4, torch.Size(shape)).to(torch.int8)
+        # (u2 - 1.5) * s == (2*u2 - 3) * (s / 2) == (2*q_int + 1) * (s / 2)
+        expected_signed = (2 * q_int + 1).to(torch.int8)
+        assert torch.equal(unpacked_signed, expected_signed)
+
+        scale_shape = (*shape[:-1], shape[-1] // 64)
+        scale = (torch.randn(scale_shape, dtype=torch.bfloat16).abs() + 0.05).contiguous()
+        dq_from_w4 = unpacked_signed.to(torch.bfloat16) * (scale * 0.5).repeat_interleave(64, dim=-1)
+        dq_ref = (q_int.float() + 0.5).to(torch.bfloat16) * scale.repeat_interleave(64, dim=-1)
+        assert torch.equal(dq_from_w4, dq_ref)
+
+    with pytest.raises(ValueError, match="Unsupported code_offset"):
+        repack_uint2b2_to_uint4b8(torch.zeros((8, 4), dtype=torch.int32), code_offset=0.25)
+
+
 def test_unpack_dequant_uint2b2_matches_reference() -> None:
     torch.manual_seed(7)
     n, k, g = 32, 128, 64
@@ -48,6 +70,35 @@ def test_unpack_dequant_uint2b2_matches_reference() -> None:
     actual = unpack_dequant_uint2b2(w2_packed, scale, group_size=g, out_dtype=torch.bfloat16)
     expected = q_int.to(torch.bfloat16) * scale.repeat_interleave(g, dim=-1)
     assert torch.equal(actual, expected)
+
+    actual_sym = unpack_dequant_uint2b2(
+        w2_packed, scale, group_size=g, out_dtype=torch.bfloat16, code_offset=0.5
+    )
+    expected_sym = (q_int.float() + 0.5).to(torch.bfloat16) * scale.repeat_interleave(g, dim=-1)
+    assert torch.equal(actual_sym, expected_sym)
+
+    with pytest.raises(ValueError, match="Unsupported code_offset"):
+        unpack_dequant_uint2b2(w2_packed, scale, group_size=g, code_offset=0.25)
+
+
+def test_extract_w2_code_offset_validation() -> None:
+    assert _extract_w2_code_offset(types.SimpleNamespace()) == 0.0
+    assert _extract_w2_code_offset(types.SimpleNamespace(observer_kwargs={})) == 0.0
+    assert (
+        _extract_w2_code_offset(
+            types.SimpleNamespace(config=types.SimpleNamespace(observer_kwargs={"code_offset": 0.5}))
+        )
+        == 0.5
+    )
+    assert (
+        _extract_w2_code_offset(
+            types.SimpleNamespace(weight_quant=types.SimpleNamespace(observer_kwargs={"code_offset": 0.5}))
+        )
+        == 0.5
+    )
+    for bad in (0.25, -0.5, 2.0, float("nan")):
+        with pytest.raises(ValueError, match="Invalid W2 code_offset"):
+            _extract_w2_code_offset(types.SimpleNamespace(observer_kwargs={"code_offset": bad}))
 
 
 def test_fast_block_hadamard_validation_and_hadacore_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
