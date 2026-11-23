@@ -2651,6 +2651,7 @@ def _write_qwen4_exp_quant_config(
     ple_cd_passes: int = 1,
     quantize_lm_head_w8: bool = False,
     quantize_mtp_fc_w8: bool = False,
+    w8_head_group_size: int | None = None,
 ) -> None:
     """Write complete config.json with compressed-tensors W4A16-HGPTQ + 4-bit Custom-LUT4 PLE metadata."""
     cfg = copy.deepcopy(base_cfg_dict)
@@ -2710,7 +2711,7 @@ def _write_qwen4_exp_quant_config(
             "weights": dict(
                 base_weights,
                 num_bits=8,
-                group_size=group_size,
+                group_size=int(w8_head_group_size or group_size),
                 strategy="group",
                 actorder=None,
             ),
@@ -3146,6 +3147,7 @@ def run_quantize_qwen4_exp(args: argparse.Namespace) -> None:
         del ids_dev, inputs_embeds, cos, sin
 
     deferred_embed_raw = dict(embed_raw)
+    w8_head_group_size = args.group_size
     if is_qwen35_moe:
         norm_raw = _load_top_level_module_tensors(base_dir, shard_map, "model.language_model.norm.")
         qwen35_shard1_tensors.update(embed_raw)
@@ -3172,6 +3174,11 @@ def run_quantize_qwen4_exp(args: argparse.Namespace) -> None:
                         total_bytes += tv.numel() * tv.element_size()
                         if tk == "lm_head.weight_packed":
                             shard_counts["lm_head_w8"] += 1
+                    if "lm_head.weight_scale" in sf.keys() and "lm_head.weight_shape" in sf.keys():
+                        lm_k = int(sf.get_tensor("lm_head.weight_shape")[1].item())
+                        lm_ng = int(sf.get_tensor("lm_head.weight_scale").shape[1])
+                        if lm_ng > 0 and lm_k % lm_ng == 0:
+                            w8_head_group_size = lm_k // lm_ng
                 deferred_embed_raw = {}
 
     # Keep embed_w on CPU if needed for MTP later; free from GPU now
@@ -3682,6 +3689,7 @@ def run_quantize_qwen4_exp(args: argparse.Namespace) -> None:
         ple_cd_passes=ple_cd_passes,
         quantize_lm_head_w8=shard_counts["lm_head_w8"] > 0,
         quantize_mtp_fc_w8=shard_counts["mtp_fc_w8"] > 0,
+        w8_head_group_size=w8_head_group_size,
     )
 
     processor.save_pretrained(str(output_dir))

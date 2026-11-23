@@ -1051,11 +1051,9 @@ def _patch_ct_w2a16() -> None:
         code_offset = float(getattr(layer, "_warp_quant_w2_code_offset", 0.0))
         if mode == "marlin_repack":
             w4 = repack_uint2b2_to_uint4b8(layer.weight_packed.data, code_offset=code_offset)
-            layer.weight_packed = torch.nn.Parameter(w4, requires_grad=False)
+            layer.weight_packed.data = w4
             if code_offset == 0.5:
-                layer.weight_scale = torch.nn.Parameter(
-                    (layer.weight_scale.data * 0.5).contiguous(), requires_grad=False
-                )
+                layer.weight_scale.data = (layer.weight_scale.data * 0.5).contiguous()
             self.num_bits = 4
             self.pack_factor = Fraction(32, 4)
             self.quant_type = scalar_types.uint4b8
