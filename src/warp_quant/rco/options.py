@@ -224,6 +224,7 @@ def refine_hessian_cd_3d(
     *,
     passes: int = 2,
     dampening_frac: float = 0.01,
+    code_offset: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Batched 3D Gauss-Seidel coordinate descent for per-expert weights [E, N, K] and Hessians [E, K, K]."""
     if passes <= 0:
@@ -241,11 +242,12 @@ def refine_hessian_cd_3d(
     h_diag = h_f.diagonal(dim1=-2, dim2=-1).clamp(min=1e-12)
 
     c_mat = codes_3d.to(device=w_f.device, dtype=torch.float32).clone()
+    eff_c_mat = c_mat + code_offset
     s_mat = scales_3d.to(device=w_f.device, dtype=torch.bfloat16).float().clone()
     idx = torch.arange(k_in, device=w_f.device).view(num_groups, group_size)
     h_blocks = h_f[:, idx.unsqueeze(2), idx.unsqueeze(1)].contiguous()
 
-    q_mat = (c_mat.view(num_exp, n_out, num_groups, group_size) * s_mat.unsqueeze(-1)).view(
+    q_mat = (eff_c_mat.view(num_exp, n_out, num_groups, group_size) * s_mat.unsqueeze(-1)).view(
         num_exp, n_out, k_in
     )
     rh = torch.bmm(w_f - q_mat, h_f)
@@ -255,37 +257,40 @@ def refine_hessian_cd_3d(
             g0, g1 = g * group_size, (g + 1) * group_size
             s_g = s_mat[:, :, g]
             c_g = c_mat[:, :, g0:g1]
+            eff_c_g = eff_c_mat[:, :, g0:g1]
             q_g_old = q_mat[:, :, g0:g1].clone()
             q_g = q_g_old.clone()
             rh_g = rh[:, :, g0:g1].clone()
             h_gg = h_blocks[:, g]
             hd_g = h_diag[:, g0:g1]
 
-            ch_g = torch.bmm(c_g, h_gg)
-            num = (c_g * rh_g).sum(dim=-1)
-            den = (c_g * ch_g).sum(dim=-1).clamp(min=1e-12)
+            ch_g = torch.bmm(eff_c_g, h_gg)
+            num = (eff_c_g * rh_g).sum(dim=-1)
+            den = (eff_c_g * ch_g).sum(dim=-1).clamp(min=1e-12)
             s_new = (s_g + num / den).clamp(min=1e-7).to(torch.bfloat16).float()
             ds = s_new - s_g
             s_g = s_new
-            q_g = c_g * s_g.unsqueeze(-1)
+            q_g = eff_c_g * s_g.unsqueeze(-1)
             rh_g = rh_g - ch_g * ds.unsqueeze(-1)
 
             for j in range(group_size):
                 q_j = q_g[:, :, j]
                 q_star = q_j + rh_g[:, :, j] / hd_g[:, j : j + 1]
-                c_new = torch.clamp(torch.round(q_star / s_g), qmin, qmax)
-                q_new = c_new * s_g
+                c_new = torch.clamp(torch.round(q_star / s_g - code_offset), qmin, qmax)
+                eff_new = c_new + code_offset
+                q_new = eff_new * s_g
                 dq = q_new - q_j
                 c_g[:, :, j] = c_new
+                eff_c_g[:, :, j] = eff_new
                 q_g[:, :, j] = q_new
                 rh_g.baddbmm_(dq.unsqueeze(2), h_gg[:, j : j + 1, :], alpha=-1.0)
 
-            ch_g = torch.bmm(c_g, h_gg)
-            num = (c_g * rh_g).sum(dim=-1)
-            den = (c_g * ch_g).sum(dim=-1).clamp(min=1e-12)
+            ch_g = torch.bmm(eff_c_g, h_gg)
+            num = (eff_c_g * rh_g).sum(dim=-1)
+            den = (eff_c_g * ch_g).sum(dim=-1).clamp(min=1e-12)
             s_new = (s_g + num / den).clamp(min=1e-7).to(torch.bfloat16).float()
             s_g = s_new
-            q_g = c_g * s_g.unsqueeze(-1)
+            q_g = eff_c_g * s_g.unsqueeze(-1)
 
             s_mat[:, :, g] = s_g
             q_mat[:, :, g0:g1] = q_g
@@ -293,6 +298,70 @@ def refine_hessian_cd_3d(
             rh.baddbmm_(dq_g, h_f[:, g0:g1, :], alpha=-1.0)
 
     return c_mat.to(torch.int8), s_mat.to(torch.bfloat16)
+
+
+@torch.no_grad()
+def _cholesky_gptq_with_offset_3d(
+    w_3d_f32: torch.Tensor,
+    norm_h_3d: torch.Tensor,
+    scale_3d: torch.Tensor,
+    num_bits: int,
+    group_size: int,
+    *,
+    code_offset: float,
+    blocksize: int = 128,
+    dampening_frac: float = 0.01,
+) -> torch.Tensor:
+    """Batched 3D block Cholesky GPTQ supporting non-zero half-integer code_offset (e.g. +0.5)."""
+    num_exp, n_out, k_in = w_3d_f32.shape
+    qmin = -(1 << (num_bits - 1))
+    qmax = (1 << (num_bits - 1)) - 1
+    h_f = norm_h_3d.detach().float().clone()
+    diag = h_f.diagonal(dim1=-2, dim2=-1)
+    diag_mean = diag.mean(dim=-1, keepdim=True).clamp(min=1e-12)
+    diag.add_(dampening_frac * diag_mean)
+
+    h_inv_u = None
+    last_exc: RuntimeError | None = None
+    for extra_damp in (0.0, 0.05, 0.15, 0.50):
+        if extra_damp > 0.0:
+            diag.add_(extra_damp * diag_mean)
+        try:
+            l_mat = torch.linalg.cholesky(h_f)
+            h_inv = torch.cholesky_inverse(l_mat)
+            h_inv_u = torch.linalg.cholesky(h_inv, upper=True)
+            break
+        except RuntimeError as exc:
+            last_exc = exc
+    if h_inv_u is None:
+        raise RuntimeError(
+            f"Batched 3D Cholesky GPTQ failed after escalating dampening (shape={tuple(w_3d_f32.shape)}): {last_exc}"
+        ) from last_exc
+
+    w_work = w_3d_f32.detach().float().clone()
+    s_exp = scale_3d.detach().float().repeat_interleave(group_size, dim=-1)
+    c_out = torch.empty((num_exp, n_out, k_in), dtype=torch.int8, device=w_3d_f32.device)
+
+    for b0 in range(0, k_in, blocksize):
+        b1 = min(b0 + blocksize, k_in)
+        w_blk = w_work[:, :, b0:b1].clone()
+        err_blk = torch.empty_like(w_blk)
+        hinv_blk = h_inv_u[:, b0:b1, b0:b1]
+        for j in range(b1 - b0):
+            col = w_blk[:, :, j]
+            sj = s_exp[:, :, b0 + j]
+            d_jj = hinv_blk[:, j, j].unsqueeze(-1)
+            c_col = torch.clamp(torch.round(col / sj - code_offset), qmin, qmax)
+            c_out[:, :, b0 + j] = c_col.to(torch.int8)
+            q_col = (c_col + code_offset) * sj
+            err = (col - q_col) / d_jj
+            err_blk[:, :, j] = err
+            if j + 1 < b1 - b0:
+                w_blk[:, :, j + 1 :].baddbmm_(err.unsqueeze(2), hinv_blk[:, j : j + 1, j + 1 :], alpha=-1.0)
+        if b1 < k_in:
+            w_work[:, :, b1:].baddbmm_(err_blk, h_inv_u[:, b0:b1, b1:], alpha=-1.0)
+
+    return c_out.contiguous()
 
 
 @torch.no_grad()
@@ -326,9 +395,22 @@ def _cholesky_gptq_with_offset(
 
     w_p = w_f32[:, perm].clone()
     h_p = h_f[perm][:, perm]
-    chol_l = torch.linalg.cholesky(h_p)
-    h_inv = torch.cholesky_inverse(chol_l)
-    h_inv_u = torch.linalg.cholesky(h_inv, upper=True)
+    h_inv_u = None
+    last_exc: RuntimeError | None = None
+    for extra_damp in (0.0, 0.05, 0.15, 0.50):
+        if extra_damp > 0.0:
+            h_p.diagonal().add_(extra_damp * diag_mean)
+        try:
+            chol_l = torch.linalg.cholesky(h_p)
+            h_inv = torch.cholesky_inverse(chol_l)
+            h_inv_u = torch.linalg.cholesky(h_inv, upper=True)
+            break
+        except RuntimeError as exc:
+            last_exc = exc
+    if h_inv_u is None:
+        raise RuntimeError(
+            f"2D Cholesky GPTQ failed after escalating dampening (shape={tuple(w_f32.shape)}): {last_exc}"
+        ) from last_exc
 
     s_exp_p = scale.float().repeat_interleave(group_size, dim=1)[:, perm]
     c_p = torch.empty((n_out, k_in), dtype=torch.int8, device=w_f32.device)

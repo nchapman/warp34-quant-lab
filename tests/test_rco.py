@@ -649,3 +649,112 @@ def test_moe_w2_w4_3d_experts_and_rco_config(tmp_path) -> None:
     assert out_qcfg["config_groups"]["w4_g64"]["weights"]["num_bits"] == 4
     assert len(out_qcfg["config_groups"]["w2_g64"]["targets"]) == 2
     assert len(out_qcfg["config_groups"]["w4_g64"]["targets"]) == 3
+
+
+def test_build_rco_quantization_config_vision_hadamard_split_for_h512() -> None:
+    manifest = {
+        "options": [
+            {"name": "w2_g128_sym", "num_bits": 2, "group_size": 128, "code_offset": 0.5},
+            {"name": "w4_g128", "num_bits": 4, "group_size": 128, "code_offset": 0.0},
+        ],
+        "hadamard_block_size": 512,
+        "groups": [
+            {"name": "l0_attn", "members": ["model.language_model.layers.0.self_attn.q_proj"]},
+            {"name": "l0_mlp", "members": ["model.language_model.layers.0.mlp.down_proj"]},
+        ],
+    }
+    qcfg = build_rco_quantization_config(
+        {"vision_config": {"hidden_size": 1152, "intermediate_size": 4304}},
+        manifest,
+        choices=[0, 1],
+        quantize_mtp=True,
+        quantize_vision=True,
+        vision_fc2_channel=True,
+    )
+    t_groups = qcfg["transform_config"]["config_groups"]
+    assert t_groups["v"]["head_dim"] == 512
+    assert t_groups["v_vision"]["head_dim"] == 128
+    assert t_groups["v_vision_fc2"]["head_dim"] == 16
+    assert not any("visual" in t for t in t_groups["v"]["apply"][0]["targets"])
+
+
+def test_moe_3d_w2_sym_code_offset_parity_and_config(tmp_path) -> None:
+    import json
+
+    import pytest
+    from compressed_tensors.quantization import QuantizationArgs
+
+    from warp_quant.hadamard_gptq import LM_HEAD_TARGET_RE, MTP_FC_TARGET_RE, TEXT_TARGET_RE
+    from warp_quant.rco.options import refine_hessian_cd, refine_hessian_cd_3d
+    from warp_quant.streaming_moe import (
+        _gptq_quantize_and_pack_3d_experts,
+        _read_ckpt_w2_code_offset,
+        _unpack_3d_experts_gpu,
+        _write_moe_rco_quant_config,
+    )
+
+    torch.manual_seed(17)
+    num_exp, n_out, k_in, gs = 3, 32, 128, 128
+    w_3d = torch.randn(num_exp, n_out, k_in, dtype=torch.bfloat16)
+    x_shared = torch.randn(256, k_in, dtype=torch.float32)
+    h_shared = ((x_shared.T @ x_shared) / 256.0).unsqueeze(0)
+    x_per = torch.randn(num_exp, 256, k_in, dtype=torch.float32)
+    h_per = torch.bmm(x_per.transpose(1, 2), x_per) / 256.0
+
+    # 3D H-CD with code_offset=0.5 matches 2D H-CD per expert
+    init_c = torch.randint(-2, 2, (num_exp, n_out, k_in), dtype=torch.int8)
+    init_s = (torch.randn(num_exp, n_out, k_in // gs, dtype=torch.bfloat16).abs() + 0.05).contiguous()
+    c3, s3 = refine_hessian_cd_3d(w_3d.float(), h_per, init_c, init_s, 2, gs, passes=2, code_offset=0.5)
+    for e in range(num_exp):
+        c2, s2 = refine_hessian_cd(
+            w_3d[e].float(), h_per[e], init_c[e], init_s[e], 2, gs, passes=2, code_offset=0.5
+        )
+        assert torch.equal(c3[e], c2)
+        assert torch.equal(s3[e], s2)
+
+    # Both shared-H (gate/up) and per-expert-H (down) W2 sym beat asymmetric W2 and round-trip bit-exact
+    for h_in in (h_shared, h_per):
+        q0, _, _, _, loss0 = _gptq_quantize_and_pack_3d_experts(
+            w_3d,
+            h_in,
+            group_size=gs,
+            actorder=None,
+            dampening_frac=0.01,
+            num_bits=2,
+            code_offset=0.0,
+            return_loss=True,
+        )
+        q5, wp5, ws5, _, loss5 = _gptq_quantize_and_pack_3d_experts(
+            w_3d,
+            h_in,
+            group_size=gs,
+            actorder=None,
+            dampening_frac=0.01,
+            num_bits=2,
+            code_offset=0.5,
+            return_loss=True,
+        )
+        assert loss5 < loss0
+        assert not torch.equal(q5, q0)
+        deq5 = _unpack_3d_experts_gpu(wp5, ws5, group_size=gs, code_offset=0.5)
+        assert torch.equal(deq5, q5)
+
+    w4_cfg = {
+        "quantization_config": {
+            "config_groups": {
+                "group_0": {"targets": [TEXT_TARGET_RE]},
+                "w8_head": {"targets": [LM_HEAD_TARGET_RE, MTP_FC_TARGET_RE]},
+            }
+        }
+    }
+    _write_moe_rco_quant_config(tmp_path, w4_cfg, [0, 1, 0, 1], group_size=128, w2_code_offset=0.5)
+    out_qcfg = json.loads((tmp_path / "config.json").read_text())["quantization_config"]
+    assert "w2_g128_sym" in out_qcfg["config_groups"]
+    assert "w4_g128" in out_qcfg["config_groups"]
+    w2_w = out_qcfg["config_groups"]["w2_g128_sym"]["weights"]
+    assert w2_w["observer_kwargs"] == {"code_offset": 0.5}
+    assert QuantizationArgs(**w2_w).observer_kwargs == {"code_offset": 0.5}
+    assert _read_ckpt_w2_code_offset(tmp_path) == 0.5
+
+    with pytest.raises(ValueError, match="Unsupported w2_code_offset"):
+        _write_moe_rco_quant_config(tmp_path, w4_cfg, [0, 1], group_size=128, w2_code_offset=0.25)

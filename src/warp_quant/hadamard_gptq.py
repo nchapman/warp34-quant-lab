@@ -516,13 +516,22 @@ def _gptq_calibrate_vision(
     num_samples: dict[str, torch.Tensor] = {}
     hooks = []
 
+    vis_hidden = int(getattr(getattr(visual, "config", None), "hidden_size", 0) or 0)
+    vis_group_cap = (
+        min(hadamard_block_size, vis_hidden & -vis_hidden)
+        if (hadamard_block_size > 0 and vis_hidden > 0)
+        else hadamard_block_size
+    )
+
     for name, mod in visual.named_modules():
         if not isinstance(mod, nn.Linear):
             continue
         target_mods[name] = mod
         orig_weights[name] = mod.weight.data.cpu().clone()
         k_in = mod.weight.shape[1]
-        had_b = min(hadamard_block_size, k_in & -k_in) if hadamard_block_size > 0 else 0
+        is_block_fc2 = name.startswith("blocks.") and name.endswith(".mlp.linear_fc2")
+        cap = hadamard_block_size if is_block_fc2 else vis_group_cap
+        had_b = min(cap, k_in & -k_in) if cap > 0 else 0
         had_blocks[name] = had_b
         if had_b > 0:
             mod.weight.data = _hadamard_rotate_weight(mod.weight.data, had_b)
@@ -1068,16 +1077,25 @@ def _update_config_for_components(
         if quantize_mtp:
             main_had_targets.append(MTP_HAD_TARGET_RE)
         if quantize_vision:
-            # Check if vision_fc2 needs a smaller Hadamard block size (e.g. K=4304 -> max power-of-2 divisor is 16)
-            vision_inter = cfg.get("vision_config", {}).get("intermediate_size", 0)
+            # Cap Vision group Hadamard to vision hidden_size divisor (e.g. K=1152 -> 128 when text uses H_512)
+            # and Vision linear_fc2 to intermediate_size divisor (e.g. K=4304 -> 16).
+            vision_cfg = cfg.get("vision_config", {}) or {}
+            vision_hidden = int(vision_cfg.get("hidden_size", 0) or 0)
+            vision_inter = int(vision_cfg.get("intermediate_size", 0) or 0)
+            vis_div = (vision_hidden & -vision_hidden) if vision_hidden > 0 else hadamard_block_size
             fc2_div = (vision_inter & -vision_inter) if vision_inter > 0 else hadamard_block_size
-            if fc2_div < hadamard_block_size:
+            if vis_div < hadamard_block_size:
+                vis_had_size = vis_div
+            else:
                 main_had_targets.append(VISION_GROUP_TARGET_RE)
+                vis_had_size = None
+            if fc2_div < hadamard_block_size:
                 fc2_had_size = fc2_div
             else:
-                main_had_targets.extend([VISION_GROUP_TARGET_RE, VISION_FC2_TARGET_RE])
+                main_had_targets.append(VISION_FC2_TARGET_RE)
                 fc2_had_size = None
         else:
+            vis_had_size = None
             fc2_had_size = None
 
         t_groups = {
@@ -1103,6 +1121,28 @@ def _update_config_for_components(
                 ],
             }
         }
+        if vis_had_size is not None and vis_had_size > 1:
+            t_groups["v_vision"] = {
+                "type": "hadamard",
+                "head_dim": vis_had_size,
+                "randomize": False,
+                "requires_grad": False,
+                "precision": "torch.float32",
+                "apply": [
+                    {
+                        "targets": [VISION_GROUP_TARGET_RE],
+                        "location": "weight_input",
+                        "inverse": True,
+                        "ignore": [],
+                    },
+                    {
+                        "targets": [VISION_GROUP_TARGET_RE],
+                        "location": "input",
+                        "inverse": False,
+                        "ignore": [],
+                    },
+                ],
+            }
         if fc2_had_size is not None and fc2_had_size > 1:
             t_groups["v_vision_fc2"] = {
                 "type": "hadamard",

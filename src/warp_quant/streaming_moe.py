@@ -1074,6 +1074,24 @@ def _prefetch_layer_raw_tensors(
     return raw_tensors
 
 
+def _read_ckpt_w2_code_offset(ckpt_dir: Path) -> float:
+    """Read optional W2 symmetric code_offset (0.0 or 0.5) from a checkpoint's config.json."""
+    cfg_p = ckpt_dir.resolve() / "config.json"
+    if not cfg_p.is_file():
+        return 0.0
+    qcfg = json.loads(cfg_p.read_text()).get("quantization_config") or {}
+    for grp in (qcfg.get("config_groups") or {}).values():
+        w_cfg = grp.get("weights") or {}
+        if int(w_cfg.get("num_bits") or 0) == 2:
+            obs_kw = w_cfg.get("observer_kwargs") or {}
+            if "code_offset" in obs_kw and obs_kw["code_offset"] is not None:
+                val = float(obs_kw["code_offset"])
+                if val not in (0.0, 0.5):
+                    raise ValueError(f"Unsupported W2 code_offset={val} in {cfg_p}; expected 0.0 or 0.5")
+                return val
+    return 0.0
+
+
 def _load_decoder_layer_weights(
     layer: nn.Module,
     layer_prefix: str,
@@ -1084,10 +1102,15 @@ def _load_decoder_layer_weights(
     group_size: int = 64,
     hadamard_block_size: int = 0,
     prefetched_raw: dict[str, torch.Tensor] | None = None,
+    w2_code_offset: float | None = None,
 ) -> None:
-    """Load a BF16 or compressed-tensors W4A16 (+ online Hadamard) decoder layer from ckpt_dir."""
+    """Load a BF16 or compressed-tensors W2/W4A16 (+ online Hadamard) decoder layer from ckpt_dir."""
     from compressed_tensors.compressors import PackedQuantizationCompressor
     from compressed_tensors.quantization import QuantizationArgs, QuantizationScheme
+
+    eff_w2_offset = _read_ckpt_w2_code_offset(ckpt_dir) if w2_code_offset is None else float(w2_code_offset)
+    if eff_w2_offset not in (0.0, 0.5):
+        raise ValueError(f"Unsupported w2_code_offset={eff_w2_offset}; expected 0.0 or 0.5")
 
     raw_tensors = (
         prefetched_raw
@@ -1133,7 +1156,12 @@ def _load_decoder_layer_weights(
                     "weight_shape": torch.tensor([num_exp * out_dim, in_dim]),
                 },
                 _make_scheme(nb, gs),
-            )["weight"].view(num_exp, out_dim, in_dim)
+            )["weight"]
+            if nb == 2 and eff_w2_offset != 0.0:
+                deq = (deq.float() + eff_w2_offset * ws_cat.float().repeat_interleave(gs, dim=1)).to(
+                    torch.bfloat16
+                )
+            deq = deq.view(num_exp, out_dim, in_dim)
             if proj_name == "gate_proj":
                 experts.gate_up_proj.data[:, :inter].copy_(deq)
             elif proj_name == "up_proj":
@@ -1168,7 +1196,12 @@ def _load_decoder_layer_weights(
                     "weight_shape": torch.tensor([num_exp * out_dim, in_dim]),
                 },
                 _make_scheme(nb, gs),
-            )["weight"].view(num_exp, out_dim, in_dim)
+            )["weight"]
+            if nb == 2 and eff_w2_offset != 0.0:
+                deq = (deq.float() + eff_w2_offset * ws_cat.float().repeat_interleave(gs, dim=1)).to(
+                    torch.bfloat16
+                )
+            deq = deq.view(num_exp, out_dim, in_dim)
             if proj_name == "gate_proj":
                 experts.gate_up_proj.data[:, :inter].copy_(deq)
             elif proj_name == "up_proj":
@@ -1322,6 +1355,7 @@ def _gptq_quantize_and_pack_3d_experts(
     expert_chunk: int = 512,
     cd_passes: int = 2,
     num_bits: int = 4,
+    code_offset: float = 0.0,
     return_loss: bool = False,
 ) -> (
     tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
@@ -1342,12 +1376,17 @@ def _gptq_quantize_and_pack_3d_experts(
     from llmcompressor.modifiers.gptq.gptq_quantize import quantize_weight
 
     from warp_quant.rco.options import (
+        _cholesky_gptq_with_offset,
+        _cholesky_gptq_with_offset_3d,
         decode_candidate,
         find_mse_scale,
         pack_candidate,
         refine_hessian_cd,
         refine_hessian_cd_3d,
     )
+
+    if code_offset not in (0.0, 0.5):
+        raise ValueError(f"Unsupported code_offset={code_offset}; expected 0.0 or 0.5")
 
     num_exp, n_out, k_in = weights_3d.shape
     eff_group_size = min(group_size, k_in)
@@ -1370,6 +1409,7 @@ def _gptq_quantize_and_pack_3d_experts(
         weights_3d.detach().float().reshape(num_exp * n_out, k_in),
         num_bits,
         eff_group_size,
+        code_offset=code_offset,
     ).view(num_exp, n_out, num_groups)
     all_zp_3d = torch.zeros_like(all_scale_3d, dtype=torch.int32)
     shared_h = hessians.shape[0] == 1
@@ -1382,21 +1422,35 @@ def _gptq_quantize_and_pack_3d_experts(
             cur_e = e1 - e0
             w_2d = weights_3d[e0:e1].reshape(cur_e * n_out, k_in).float()
             s_2d = all_scale_3d[e0:e1].reshape(cur_e * n_out, num_groups)
-            zp_2d = all_zp_3d[e0:e1].reshape(cur_e * n_out, num_groups)
-            q_chunk, _losses, used_rtn = quantize_weight(
-                weights=w_2d.clone().unsqueeze(0),
-                hessians=h_shared_2d.clone().unsqueeze(0),
-                scale=s_2d.unsqueeze(0),
-                zero_point=zp_2d.unsqueeze(0),
-                global_scale=None,
-                quant_args=qargs,
-                blocksize=128,
-                percdamp=dampening_frac,
-            )
-            if used_rtn.any().item():
-                raise RuntimeError(f"GPTQ fell back to RTN on shared-H experts [{e0}:{e1}]")
-            s_exp_2d = s_2d.float().repeat_interleave(eff_group_size, dim=1)
-            c_2d = torch.clamp(torch.round(q_chunk[0].float() / s_exp_2d), qmin, qmax).to(torch.int8)
+            if code_offset == 0.0:
+                zp_2d = all_zp_3d[e0:e1].reshape(cur_e * n_out, num_groups)
+                q_chunk, _losses, used_rtn = quantize_weight(
+                    weights=w_2d.clone().unsqueeze(0),
+                    hessians=h_shared_2d.clone().unsqueeze(0),
+                    scale=s_2d.unsqueeze(0),
+                    zero_point=zp_2d.unsqueeze(0),
+                    global_scale=None,
+                    quant_args=qargs,
+                    blocksize=128,
+                    percdamp=dampening_frac,
+                )
+                if used_rtn.any().item():
+                    raise RuntimeError(f"GPTQ fell back to RTN on shared-H experts [{e0}:{e1}]")
+                s_exp_2d = s_2d.float().repeat_interleave(eff_group_size, dim=1)
+                c_2d = torch.clamp(torch.round(q_chunk[0].float() / s_exp_2d), qmin, qmax).to(torch.int8)
+                del zp_2d, q_chunk
+            else:
+                c_2d, _ = _cholesky_gptq_with_offset(
+                    w_2d,
+                    h_shared_2d,
+                    s_2d,
+                    num_bits,
+                    eff_group_size,
+                    code_offset=code_offset,
+                    actorder=actorder,
+                    blocksize=128,
+                    dampening_frac=dampening_frac,
+                )
             if cd_passes > 0:
                 c_2d, s_2d = refine_hessian_cd(
                     w_2d,
@@ -1407,8 +1461,11 @@ def _gptq_quantize_and_pack_3d_experts(
                     eff_group_size,
                     passes=cd_passes,
                     dampening_frac=dampening_frac,
+                    code_offset=code_offset,
                 )
-            dec_2d = decode_candidate(c_2d, s_2d, eff_group_size, dtype=weights_3d.dtype)
+            dec_2d = decode_candidate(
+                c_2d, s_2d, eff_group_size, dtype=weights_3d.dtype, code_offset=code_offset
+            )
             if return_loss:
                 diff_2d = w_2d - dec_2d.float()
                 h_loss += 0.5 * float(((diff_2d @ h_shared_2d) * diff_2d).sum().item())
@@ -1416,28 +1473,41 @@ def _gptq_quantize_and_pack_3d_experts(
             q_w_3d[e0:e1].copy_(dec_2d.view(cur_e, n_out, k_in))
             codes_3d[e0:e1].copy_(c_2d.view(cur_e, n_out, k_in))
             all_scale_3d[e0:e1].copy_(s_2d.view(cur_e, n_out, num_groups))
-            del w_2d, s_2d, zp_2d, q_chunk, c_2d, dec_2d
+            del w_2d, s_2d, c_2d, dec_2d
     else:
         for e0 in range(0, num_exp, expert_chunk):
             e1 = min(e0 + expert_chunk, num_exp)
             w_chunk = weights_3d[e0:e1].float()
             h_chunk = hessians[e0:e1].float().contiguous()
             scale_chunk = all_scale_3d[e0:e1]
-            zp_chunk = all_zp_3d[e0:e1]
-            q_chunk, _losses, used_rtn = quantize_weight(
-                weights=w_chunk.clone(),
-                hessians=h_chunk.clone(),
-                scale=scale_chunk,
-                zero_point=zp_chunk,
-                global_scale=None,
-                quant_args=qargs,
-                blocksize=128,
-                percdamp=dampening_frac,
-            )
-            if used_rtn.any().item():
-                raise RuntimeError(f"GPTQ fell back to RTN on per-expert H [{e0}:{e1}]")
-            s_exp_3d = scale_chunk.float().repeat_interleave(eff_group_size, dim=-1)
-            c_chunk = torch.clamp(torch.round(q_chunk.float() / s_exp_3d), qmin, qmax).to(torch.int8)
+            if code_offset == 0.0:
+                zp_chunk = all_zp_3d[e0:e1]
+                q_chunk, _losses, used_rtn = quantize_weight(
+                    weights=w_chunk.clone(),
+                    hessians=h_chunk.clone(),
+                    scale=scale_chunk,
+                    zero_point=zp_chunk,
+                    global_scale=None,
+                    quant_args=qargs,
+                    blocksize=128,
+                    percdamp=dampening_frac,
+                )
+                if used_rtn.any().item():
+                    raise RuntimeError(f"GPTQ fell back to RTN on per-expert H [{e0}:{e1}]")
+                s_exp_3d = scale_chunk.float().repeat_interleave(eff_group_size, dim=-1)
+                c_chunk = torch.clamp(torch.round(q_chunk.float() / s_exp_3d), qmin, qmax).to(torch.int8)
+                del zp_chunk, q_chunk
+            else:
+                c_chunk = _cholesky_gptq_with_offset_3d(
+                    w_chunk,
+                    h_chunk,
+                    scale_chunk,
+                    num_bits,
+                    eff_group_size,
+                    code_offset=code_offset,
+                    blocksize=128,
+                    dampening_frac=dampening_frac,
+                )
             if cd_passes > 0:
                 c_chunk, scale_chunk = refine_hessian_cd_3d(
                     w_chunk,
@@ -1448,9 +1518,10 @@ def _gptq_quantize_and_pack_3d_experts(
                     eff_group_size,
                     passes=cd_passes,
                     dampening_frac=dampening_frac,
+                    code_offset=code_offset,
                 )
             dec_3d = (
-                c_chunk.float().view(e1 - e0, n_out, num_groups, eff_group_size)
+                (c_chunk.float() + code_offset).view(e1 - e0, n_out, num_groups, eff_group_size)
                 * scale_chunk.float().unsqueeze(-1)
             ).view(e1 - e0, n_out, k_in)
             if return_loss:
@@ -1460,7 +1531,7 @@ def _gptq_quantize_and_pack_3d_experts(
             q_w_3d[e0:e1].copy_(dec_3d.to(weights_3d.dtype))
             codes_3d[e0:e1].copy_(c_chunk)
             all_scale_3d[e0:e1].copy_(scale_chunk)
-            del w_chunk, h_chunk, scale_chunk, zp_chunk, q_chunk, c_chunk, dec_3d
+            del w_chunk, h_chunk, scale_chunk, c_chunk, dec_3d
 
     # Losslessly pack exact int8 codes into int32 words without float roundtrip drift
     comp_2d = pack_candidate(
@@ -1662,6 +1733,7 @@ def _quantize_decoder_layer_streaming(
     dense_expert_calib_seqs: int = 32,
     reuse_ple_dir: Path | None = None,
     rco_w2_bank_dir: Path | None = None,
+    w2_code_offset: float = 0.5,
     teacher_qat_state: dict[str, Any] | None = None,
 ) -> tuple[dict[str, torch.Tensor], dict[str, str], int, dict[str, int]]:
     """Quantize a single Qwen4ExpTextDecoderLayer or Qwen3_5MoeDecoderLayer (or MTP layer) in-place, advance h_calib, and return shard dict."""
@@ -2101,6 +2173,7 @@ def _quantize_decoder_layer_streaming(
                 actorder=None,
                 dampening_frac=dampening_frac,
                 num_bits=2,
+                code_offset=w2_code_offset,
                 return_loss=True,
             )
             assert q_w2_gate_up is not None
@@ -2218,6 +2291,7 @@ def _quantize_decoder_layer_streaming(
                 actorder=None,
                 dampening_frac=dampening_frac,
                 num_bits=2,
+                code_offset=w2_code_offset,
                 return_loss=True,
             )
         )
@@ -2271,6 +2345,7 @@ def _quantize_decoder_layer_streaming(
             {
                 "layer_idx": layer_idx,
                 "layer_prefix": layer_prefix,
+                "code_offset": float(w2_code_offset),
                 "w2_tensors": w2_layer_tensors,
                 "packed_3d": w2_packed_3d,
                 "metrics": {
@@ -2650,15 +2725,23 @@ def _write_qwen4_exp_quant_config(
         if quantize_mtp:
             main_had_targets.append(MTP_HAD_TARGET_RE)
         if quantize_vision:
-            vision_inter = cfg.get("vision_config", {}).get("intermediate_size", 0)
+            vision_cfg = cfg.get("vision_config", {}) or {}
+            vision_hidden = int(vision_cfg.get("hidden_size", 0) or 0)
+            vision_inter = int(vision_cfg.get("intermediate_size", 0) or 0)
+            vis_div = (vision_hidden & -vision_hidden) if vision_hidden > 0 else hadamard_block_size
             fc2_div = (vision_inter & -vision_inter) if vision_inter > 0 else hadamard_block_size
-            if fc2_div < hadamard_block_size:
+            if vis_div < hadamard_block_size:
+                vis_had_size = vis_div
+            else:
                 main_had_targets.append(VISION_GROUP_TARGET_RE)
+                vis_had_size = None
+            if fc2_div < hadamard_block_size:
                 fc2_had_size = fc2_div
             else:
-                main_had_targets.extend([VISION_GROUP_TARGET_RE, VISION_FC2_TARGET_RE])
+                main_had_targets.append(VISION_FC2_TARGET_RE)
                 fc2_had_size = None
         else:
+            vis_had_size = None
             fc2_had_size = None
 
         t_groups = {
@@ -2684,6 +2767,28 @@ def _write_qwen4_exp_quant_config(
                 ],
             }
         }
+        if vis_had_size is not None and vis_had_size > 1:
+            t_groups["v_vision"] = {
+                "type": "hadamard",
+                "head_dim": vis_had_size,
+                "randomize": False,
+                "requires_grad": False,
+                "precision": "torch.float32",
+                "apply": [
+                    {
+                        "targets": [VISION_GROUP_TARGET_RE],
+                        "location": "weight_input",
+                        "inverse": True,
+                        "ignore": [],
+                    },
+                    {
+                        "targets": [VISION_GROUP_TARGET_RE],
+                        "location": "input",
+                        "inverse": False,
+                        "ignore": [],
+                    },
+                ],
+            }
         if fc2_had_size is not None and fc2_had_size > 1:
             t_groups["v_vision_fc2"] = {
                 "type": "hadamard",
@@ -3638,9 +3743,10 @@ def _load_qwen4_exp_visual_from_checkpoint(
         from transformers.models.qwen4_exp.modeling_qwen4_exp import Qwen4ExpVisionModel as VisCls
 
     qcfg = raw_cfg.get("quantization_config", {})
-    g_size = qcfg.get("config_groups", {}).get("group_0", {}).get("weights", {}).get("group_size", 64)
     tcfg = qcfg.get("transform_config", {}).get("config_groups", {})
-    had_size = tcfg.get("v", {}).get("head_dim", 0) if tcfg else 0
+    main_had_size = tcfg.get("v", {}).get("head_dim", 0) if tcfg else 0
+    vis_had_size = tcfg.get("v_vision", tcfg.get("v", {})).get("head_dim", 0) if tcfg else 0
+    fc2_had_size = tcfg.get("v_vision_fc2", {}).get("head_dim", 0) if tcfg else 0
 
     vis_raw = _load_top_level_module_tensors(ckpt_dir, shard_map, "model.visual.")
     with torch.device(device), skip_weights_initialize():
@@ -3651,10 +3757,6 @@ def _load_qwen4_exp_visual_from_checkpoint(
         k.removesuffix(".weight_packed") for k in rel_tensors if k.endswith(".weight_packed")
     )
 
-    group_scheme = QuantizationScheme(
-        targets=["Linear"],
-        weights=QuantizationArgs(num_bits=4, type="int", symmetric=True, strategy="group", group_size=g_size),
-    )
     chan_scheme = QuantizationScheme(
         targets=["Linear"],
         weights=QuantizationArgs(num_bits=4, type="int", symmetric=True, strategy="channel"),
@@ -3664,16 +3766,28 @@ def _load_qwen4_exp_visual_from_checkpoint(
         wp = rel_tensors.pop(f"{p_rel}.weight_packed").to(device)
         ws = rel_tensors.pop(f"{p_rel}.weight_scale").to(device)
         wsh = rel_tensors.pop(f"{p_rel}.weight_shape")
-        scheme = chan_scheme if ws.shape[1] == 1 else group_scheme
+        in_dim_v = int(wsh[1].item())
+        if ws.shape[1] == 1:
+            scheme = chan_scheme
+        else:
+            gs_v = in_dim_v // int(ws.shape[1])
+            scheme = QuantizationScheme(
+                targets=["Linear"],
+                weights=QuantizationArgs(
+                    num_bits=4, type="int", symmetric=True, strategy="group", group_size=gs_v
+                ),
+            )
         deq = PackedQuantizationCompressor.decompress(
             {"weight_packed": wp, "weight_scale": ws, "weight_shape": wsh},
             scheme,
         )["weight"].to(torch.bfloat16)
         mod = visual.get_submodule(p_rel)
         mod.weight.data.copy_(deq)
-        if had_size > 0:
+        is_block_fc2 = p_rel.startswith("blocks.") and p_rel.endswith(".mlp.linear_fc2")
+        eff_had = (fc2_had_size if fc2_had_size > 0 else main_had_size) if is_block_fc2 else vis_had_size
+        if eff_had > 0:
             k_in = int(deq.shape[1])
-            b_size = min(had_size, k_in & -k_in)
+            b_size = min(eff_had, k_in & -k_in)
             if b_size > 1:
                 mod.register_forward_pre_hook(
                     lambda _m, args, bs=b_size: (
@@ -4594,8 +4708,11 @@ def _unpack_3d_experts_gpu(
     *,
     group_size: int = 64,
     dtype: torch.dtype = torch.bfloat16,
+    code_offset: float = 0.0,
 ) -> torch.Tensor:
     """Fast pure-GPU unpack of [E, N_out, K_in // lanes] int32 + [E, N_out, K_in // gs] scales to BF16."""
+    if code_offset not in (0.0, 0.5):
+        raise ValueError(f"Unsupported code_offset={code_offset}; expected 0.0 or 0.5")
     num_exp, n_out, num_groups = scales_3d.shape
     k_in = num_groups * group_size
     num_bits = (int(packed_3d.shape[-1]) * 32) // k_in
@@ -4606,7 +4723,11 @@ def _unpack_3d_experts_gpu(
     codes = (((packed_3d.unsqueeze(-1) >> shifts) & mask) - offset).reshape(
         num_exp, n_out, num_groups, group_size
     )
-    return (codes.to(dtype) * scales_3d.to(dtype).unsqueeze(-1)).reshape(num_exp, n_out, k_in)
+    if num_bits == 2 and code_offset != 0.0:
+        eff_codes = (codes.to(torch.float32) + float(code_offset)).to(dtype)
+    else:
+        eff_codes = codes.to(dtype)
+    return (eff_codes * scales_3d.to(dtype).unsqueeze(-1)).reshape(num_exp, n_out, k_in)
 
 
 def _write_moe_rco_quant_config(
@@ -4615,8 +4736,11 @@ def _write_moe_rco_quant_config(
     layer_choices: list[int],
     *,
     group_size: int = 64,
+    w2_code_offset: float = 0.0,
 ) -> None:
     """Write compressed-tensors config.json for a W2/W4 HGPTQ-RCO Qwen3.5-MoE checkpoint."""
+    if w2_code_offset not in (0.0, 0.5):
+        raise ValueError(f"Unsupported w2_code_offset={w2_code_offset}; expected 0.0 or 0.5")
     cfg = copy.deepcopy(w4_cfg_dict)
     qcfg = cfg["quantization_config"]
     old_groups = qcfg["config_groups"]
@@ -4643,12 +4767,16 @@ def _write_moe_rco_quant_config(
             f"re:.*(?<!mtp\\.)layers\\.{l_idx}\\.mlp\\.experts\\.\\d+\\.(gate_proj|up_proj|down_proj)$"
             for l_idx in w2_layers
         ]
-        new_groups["w2_g64"] = {
+        w2_grp_name = f"w2_g{group_size}_sym" if w2_code_offset == 0.5 else f"w2_g{group_size}"
+        w2_obs_kw = {"code_offset": float(w2_code_offset)} if w2_code_offset != 0.0 else {}
+        new_groups[w2_grp_name] = {
             "format": "pack-quantized",
             "input_activations": None,
             "output_activations": None,
             "targets": w2_targets,
-            "weights": dict(base_weights, num_bits=2, group_size=group_size, actorder=None),
+            "weights": dict(
+                base_weights, num_bits=2, group_size=group_size, actorder=None, observer_kwargs=w2_obs_kw
+            ),
         }
 
     w4_targets = [
@@ -4658,7 +4786,7 @@ def _write_moe_rco_quant_config(
         f"re:.*(?<!mtp\\.)layers\\.{l_idx}\\.mlp\\.experts\\.\\d+\\.(gate_proj|up_proj|down_proj)$"
         for l_idx in w4_layers
     )
-    new_groups["w4_g64"] = {
+    new_groups[f"w4_g{group_size}"] = {
         "format": "pack-quantized",
         "input_activations": None,
         "output_activations": None,
@@ -4693,6 +4821,7 @@ def assemble_moe_rco_checkpoint(
     layer_choices: list[int],
     allocation_name: str,
     group_size: int = 64,
+    w2_code_offset: float = 0.0,
     qat_state_dict: dict[str, torch.Tensor] | None = None,
     summary_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -4826,7 +4955,9 @@ def assemble_moe_rco_checkpoint(
     if all(c == 1 for c in layer_choices):
         (out_dir / "config.json").write_text(json.dumps(w4_cfg, indent=2, sort_keys=True) + "\n")
     else:
-        _write_moe_rco_quant_config(out_dir, w4_cfg, layer_choices, group_size=group_size)
+        _write_moe_rco_quant_config(
+            out_dir, w4_cfg, layer_choices, group_size=group_size, w2_code_offset=w2_code_offset
+        )
 
     _assert_packed_alignment(out_dir)
     stamp_release_template(out_dir)
@@ -4840,6 +4971,8 @@ def assemble_moe_rco_checkpoint(
         "layer_choices": [int(c) for c in layer_choices],
         "w2_layers": [l_idx for l_idx, c in enumerate(layer_choices) if c == 0],
         "w4_layers": [l_idx for l_idx, c in enumerate(layer_choices) if c == 1],
+        "group_size": group_size,
+        "w2_code_offset": float(w2_code_offset),
         "routed_expert_avg_bits": routed_bpw,
         "total_safetensors_bytes": tot_bytes,
         "total_safetensors_gib": tot_bytes / (1024**3),
@@ -4916,6 +5049,7 @@ def run_moe_rco_search_and_qat(
     # 1. Load per-layer W2 bank metrics and packed 3D tensors (only needed when budgets is non-empty)
     layer_metrics: list[dict[str, Any]] = []
     w2_packed_gpu: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] = []
+    w2_code_offset = 0.0
     if budgets:
         for l_idx in range(num_layers):
             b = torch.load(
@@ -4923,6 +5057,13 @@ def run_moe_rco_search_and_qat(
                 map_location="cpu",
                 weights_only=True,
             )
+            l_off = float(b.get("code_offset", 0.0))
+            if l_idx == 0:
+                w2_code_offset = l_off
+            elif l_off != w2_code_offset:
+                raise ValueError(
+                    f"Inconsistent W2 bank code_offset at layer {l_idx}: {l_off} != {w2_code_offset}"
+                )
             layer_metrics.append(b["metrics"])
             p3d = b["packed_3d"]
             wp_gu_w2 = torch.cat([p3d["gate_proj_packed"], p3d["up_proj_packed"]], dim=1).to(w2_init_dev)
@@ -4979,7 +5120,10 @@ def run_moe_rco_search_and_qat(
     if "lm_head.weight_packed" in w4_head_raw:
         wp_h = w4_head_raw["lm_head.weight_packed"].to(device).unsqueeze(0)
         ws_h = w4_head_raw["lm_head.weight_scale"].to(device).unsqueeze(0)
-        student_lm_head_w = _unpack_3d_experts_gpu(wp_h, ws_h, group_size=group_size).squeeze(0)
+        wsh_h = w4_head_raw.get("lm_head.weight_shape")
+        k_in_h = int(wsh_h[1].item()) if wsh_h is not None else int(base_lm_head_w.shape[1])
+        head_gs = k_in_h // int(ws_h.shape[-1])
+        student_lm_head_w = _unpack_3d_experts_gpu(wp_h, ws_h, group_size=head_gs).squeeze(0)
         del wp_h, ws_h
     else:
         student_lm_head_w = w4_head_raw["lm_head.weight"].to(device=device, dtype=torch.bfloat16)
@@ -5085,8 +5229,12 @@ def run_moe_rco_search_and_qat(
             ws_gu = ws_gu.to(x_2d.device, non_blocking=True)
             wp_dn = wp_dn.to(x_2d.device, non_blocking=True)
             ws_dn = ws_dn.to(x_2d.device, non_blocking=True)
-        gu_3d = _unpack_3d_experts_gpu(wp_gu, ws_gu, group_size=group_size, dtype=x_2d.dtype)
-        dn_3d = _unpack_3d_experts_gpu(wp_dn, ws_dn, group_size=group_size, dtype=x_2d.dtype)
+        gu_3d = _unpack_3d_experts_gpu(
+            wp_gu, ws_gu, group_size=group_size, dtype=x_2d.dtype, code_offset=w2_code_offset
+        )
+        dn_3d = _unpack_3d_experts_gpu(
+            wp_dn, ws_dn, group_size=group_size, dtype=x_2d.dtype, code_offset=w2_code_offset
+        )
         x_in = (
             _hadamard_rotate_last_dim(x_2d, had_moe_in, compute_dtype=torch.float32)
             if had_moe_in > 0
@@ -5562,6 +5710,7 @@ def run_moe_rco_search_and_qat(
             layer_choices=ainfo["choices"],
             allocation_name=aname,
             group_size=group_size,
+            w2_code_offset=w2_code_offset,
             qat_state_dict=qat_sd,
             summary_meta={
                 "budget": ainfo["budget"],

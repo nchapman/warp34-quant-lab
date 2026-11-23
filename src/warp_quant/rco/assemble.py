@@ -235,15 +235,23 @@ def build_rco_quantization_config(
         if quantize_mtp:
             main_had_targets.append(MTP_HAD_TARGET_RE)
         if quantize_vision:
-            vision_inter = base_cfg.get("vision_config", {}).get("intermediate_size", 0)
+            vision_cfg = base_cfg.get("vision_config", {}) or {}
+            vision_hidden = int(vision_cfg.get("hidden_size", 0) or 0)
+            vision_inter = int(vision_cfg.get("intermediate_size", 0) or 0)
+            vis_div = (vision_hidden & -vision_hidden) if vision_hidden > 0 else hadamard_block_size
             fc2_div = (vision_inter & -vision_inter) if vision_inter > 0 else hadamard_block_size
-            if fc2_div < hadamard_block_size:
+            if vis_div < hadamard_block_size:
+                vis_had_size = vis_div
+            else:
                 main_had_targets.append(VISION_GROUP_TARGET_RE)
+                vis_had_size = None
+            if fc2_div < hadamard_block_size:
                 fc2_had_size = fc2_div
             else:
-                main_had_targets.extend([VISION_GROUP_TARGET_RE, VISION_FC2_TARGET_RE])
+                main_had_targets.append(VISION_FC2_TARGET_RE)
                 fc2_had_size = None
         else:
+            vis_had_size = None
             fc2_had_size = None
 
         t_groups = {
@@ -269,6 +277,28 @@ def build_rco_quantization_config(
                 ],
             }
         }
+        if vis_had_size is not None and vis_had_size > 1:
+            t_groups["v_vision"] = {
+                "type": "hadamard",
+                "head_dim": vis_had_size,
+                "randomize": False,
+                "requires_grad": False,
+                "precision": "torch.float32",
+                "apply": [
+                    {
+                        "targets": [VISION_GROUP_TARGET_RE],
+                        "location": "weight_input",
+                        "inverse": True,
+                        "ignore": [],
+                    },
+                    {
+                        "targets": [VISION_GROUP_TARGET_RE],
+                        "location": "input",
+                        "inverse": False,
+                        "ignore": [],
+                    },
+                ],
+            }
         if fc2_had_size is not None and fc2_had_size > 1:
             t_groups["v_vision_fc2"] = {
                 "type": "hadamard",
