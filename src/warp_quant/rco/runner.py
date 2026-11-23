@@ -570,7 +570,8 @@ def run_rco_cli(args: argparse.Namespace) -> None:
 
     if args.assemble:
         to_assemble = args.assemble if "all" not in args.assemble else list(allocations.keys())
-        manifest, opt_candidates = load_rco_bank(active_bank_dir)
+        manifest, raw_candidates = load_rco_bank(bank_dir)
+        _, opt_candidates = load_rco_bank(active_bank_dir)
         low_st_cached = (
             torch.load(work_dir / "all_low_scale_qat_state.pt", map_location="cpu", weights_only=True)
             if (work_dir / "all_low_scale_qat_state.pt").is_file()
@@ -587,6 +588,9 @@ def run_rco_cli(args: argparse.Namespace) -> None:
 
             scale_overrides = None
             bf16_overrides = None
+            use_clean_bank = getattr(args, "scale_qat", False) and (
+                name != "all_low" and not name.endswith("_sensitivity")
+            )
             if getattr(args, "scale_qat", False) and not name.endswith("_sensitivity"):
                 state_file = work_dir / f"{name}_scale_qat_state.pt"
                 if name == "all_low" and low_st_cached is not None:
@@ -595,9 +599,10 @@ def run_rco_cli(args: argparse.Namespace) -> None:
                     st = torch.load(state_file, map_location="cpu", weights_only=True)
                 else:
                     is_all_high = name == "all_high"
-                    # Always restore clean BF16 norms/GDN-gates before per-allocation QAT so
-                    # FP32-master anchor_wd pulls toward clean BF16 rather than all_low's
-                    # distorted All-W2 norms (-0.0211 probe-guard KL on 9B).
+                    # Always restore clean BF16 norms/GDN-gates AND start from clean GPTQ W2 scales
+                    # (`raw_candidates` from `bank_dir`) before per-allocation QAT so FP32-master
+                    # `anchor_wd` pulls toward clean GPTQ/BF16 rather than `all_low`'s distorted
+                    # All-W2 scales/norms (and post-RCO QAT actually converges instead of reverting).
                     with torch.no_grad():
                         for full_k, orig_w in clean_bf16_backup.items():
                             mod = model.get_submodule(full_k[:-7])
@@ -608,7 +613,7 @@ def run_rco_cli(args: argparse.Namespace) -> None:
                         model,
                         None,
                         manifest,
-                        opt_candidates,
+                        raw_candidates if use_clean_bank else opt_candidates,
                         allocations[name]["choices"],
                         train_rows=qat_train_rows[:n_qat],
                         val_rows=search_rows[:32],
@@ -633,7 +638,7 @@ def run_rco_cli(args: argparse.Namespace) -> None:
             log_event("RCO_ASSEMBLE", allocation=name, out=str(out_ckpt))
             assemble_rco_checkpoint(
                 base_dir=base_dir,
-                bank_dir=active_bank_dir,
+                bank_dir=bank_dir if use_clean_bank else active_bank_dir,
                 choices=allocations[name]["choices"],
                 output_dir=out_ckpt,
                 model_key=args.model,
