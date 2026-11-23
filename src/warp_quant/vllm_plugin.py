@@ -1007,7 +1007,7 @@ def _patch_ct_w2a16() -> None:
         )
         layer.register_parameter("weight_packed", qweight)
 
-        is_sharded = not (self.group_size == -1 or self.has_g_idx)
+        is_sharded = not (self.group_size == -1 or bool(getattr(self, "has_g_idx", False)))
         scale_cls = GroupQuantScaleParameter if is_sharded else ChannelQuantScaleParameter
         scale_args: dict[str, Any] = {
             "weight_loader": weight_loader,
