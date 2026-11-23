@@ -2471,7 +2471,7 @@ def run_probe(args: argparse.Namespace) -> None:
     has_gguf = any(qd.suffix.lower() == ".gguf" for qd in quant_dirs)
     base_mem_bytes = sum(p.numel() * p.element_size() for p in base_model.parameters())
     total_vram_bytes = int(torch.cuda.get_device_properties(0).total_memory)
-    need_cpu_swap = base_mem_bytes * 2.65 > total_vram_bytes
+    need_cpu_swap = base_mem_bytes * 3.0 > total_vram_bytes
     cache_base_hidden = len(quant_dirs) > 1 or has_gguf or need_cpu_swap
     for eval_path_str in args.eval_sets:
         eval_path = Path(eval_path_str)
