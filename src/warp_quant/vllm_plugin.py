@@ -923,11 +923,11 @@ def _patch_ct_w2a16() -> None:
         )
         CompressedTensorsWNA16 = wna16_mod.CompressedTensorsWNA16
         param_mod = importlib.import_module("vllm.model_executor.parameter")
+        BasevLLMParameter = param_mod.BasevLLMParameter
         ChannelQuantScaleParameter = param_mod.ChannelQuantScaleParameter
         GroupQuantScaleParameter = param_mod.GroupQuantScaleParameter
         PackedColumnParameter = param_mod.PackedColumnParameter
         PackedvLLMParameter = param_mod.PackedvLLMParameter
-        RowvLLMParameter = param_mod.RowvLLMParameter
         has_humming = importlib.import_module("vllm.utils.import_utils").has_humming
     except Exception:
         return
@@ -1024,10 +1024,8 @@ def _patch_ct_w2a16() -> None:
             scale_args["input_dim"] = 1
         layer.register_parameter("weight_scale", scale_cls(**scale_args))
 
-        weight_shape = RowvLLMParameter(
-            data=torch.empty(len(output_partition_sizes), 2, dtype=torch.int32),
-            input_dim=1,
-            output_dim=0,
+        weight_shape = BasevLLMParameter(
+            data=torch.empty(2, dtype=torch.int64),
             weight_loader=weight_loader,
         )
         layer.register_parameter("weight_shape", weight_shape)
