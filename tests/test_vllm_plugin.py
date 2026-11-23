@@ -763,3 +763,33 @@ def test_stamp_vllm_autoload_normalizes_configs_and_synthesizes_preprocessors(
         "vllm_warp_quant.WarpQuantTokenizer",
         "vllm_warp_quant.WarpQuantTokenizer",
     ]
+
+
+def test_w2_code_offset_scheme_propagation_and_stamp_vision_suffix(tmp_path) -> None:
+    import json
+
+    from warp_quant.stamp import ensure_processor_configs
+    from warp_quant.vllm_plugin import _extract_w2_code_offset
+
+    class _SchemeStub:
+        _warp_quant_w2_code_offset = 0.5
+
+    assert _extract_w2_code_offset(_SchemeStub()) == 0.5
+
+    # transformers 5.19 emits model_type='qwen3_5_moe_vision' while base config has 'qwen3_5_moe'
+    dst = tmp_path / "out"
+    src = tmp_path / "base"
+    dst.mkdir()
+    src.mkdir()
+    (dst / "config.json").write_text(
+        json.dumps({"vision_config": {"model_type": "qwen3_5_moe_vision", "hidden_size": 1152}})
+    )
+    (src / "config.json").write_text(
+        json.dumps({"vision_config": {"model_type": "qwen3_5_moe", "hidden_size": 1152}})
+    )
+    (src / "preprocessor_config.json").write_text(
+        json.dumps({"image_processor_type": "Qwen2VLImageProcessor"})
+    )
+    added = ensure_processor_configs(dst, fallback=src)
+    assert added == ["preprocessor_config.json"]
+    assert (dst / "preprocessor_config.json").is_file()

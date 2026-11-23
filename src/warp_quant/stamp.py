@@ -78,7 +78,18 @@ def ensure_processor_configs(
         raise SystemExit(
             f"processor_hub_fallback {fallback!r}: vision_config missing on one side — refusing ungated processor fill"
         )
-    if {k: x for k, x in a.items() if k != "dtype"} != {k: x for k, x in b.items() if k != "dtype"}:
+
+    def _norm_vis(cfg_v: dict[str, Any]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for k, x in cfg_v.items():
+            if k == "dtype":
+                continue
+            if k == "model_type" and isinstance(x, str):
+                x = x.removesuffix("_vision")
+            out[k] = x
+        return out
+
+    if _norm_vis(a) != _norm_vis(b):
         raise SystemExit(f"processor_hub_fallback {fallback!r} vision tower differs from target snapshot")
     added: list[str] = []
     for name in todo:

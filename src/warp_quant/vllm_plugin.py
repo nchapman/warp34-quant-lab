@@ -40,6 +40,12 @@ _REGISTERED = False
 
 def _extract_w2_code_offset(obj: Any) -> float:
     """Extract optional symmetric half-integer `code_offset` from a CT scheme or weight_quant config."""
+    direct = getattr(obj, "_warp_quant_w2_code_offset", None)
+    if direct is not None:
+        val = float(direct)
+        if not math.isfinite(val) or val not in (0.0, 0.5):
+            raise ValueError(f"Invalid W2 code_offset={val} (expected 0.0 or 0.5)")
+        return val
     candidates = [obj]
     for attr in ("config", "weight_quant", "weights"):
         sub = getattr(obj, attr, None)
@@ -881,7 +887,36 @@ def _patch_ct_w2a16() -> None:
     except Exception:
         pass
 
-    # 2. Patch CompressedTensorsWNA16 (LinearBase) for num_bits == 2 when Humming is not used
+    # 2a. Propagate `weight_quant` (including observer_kwargs.code_offset) onto CompressedTensorsWNA16
+    # because upstream CompressedTensorsWNA16.__init__ only keeps scalar fields and drops observer_kwargs.
+    try:
+        ct_mod = importlib.import_module(
+            "vllm.model_executor.layers.quantization.compressed_tensors.compressed_tensors"
+        )
+        CompressedTensorsConfig = ct_mod.CompressedTensorsConfig
+        if not getattr(CompressedTensorsConfig, "_warp_quant_w2_scheme_patched", False):
+            orig_get_scheme_from_parts = CompressedTensorsConfig._get_scheme_from_parts
+
+            def _patched_get_scheme_from_parts(self: Any, *args: Any, **kwargs: Any) -> Any:
+                scheme = orig_get_scheme_from_parts(self, *args, **kwargs)
+                weight_quant = kwargs.get("weight_quant")
+                if weight_quant is None and args:
+                    weight_quant = args[0]
+                if (
+                    scheme is not None
+                    and weight_quant is not None
+                    and getattr(weight_quant, "num_bits", None) == 2
+                ):
+                    scheme.weight_quant = weight_quant
+                    scheme._warp_quant_w2_code_offset = _extract_w2_code_offset(weight_quant)
+                return scheme
+
+            CompressedTensorsConfig._get_scheme_from_parts = _patched_get_scheme_from_parts
+            CompressedTensorsConfig._warp_quant_w2_scheme_patched = True
+    except Exception:
+        pass
+
+    # 2b. Patch CompressedTensorsWNA16 (LinearBase) for num_bits == 2 when Humming is not used or code_offset != 0
     try:
         wna16_mod = importlib.import_module(
             "vllm.model_executor.layers.quantization.compressed_tensors.schemes.compressed_tensors_wNa16"
