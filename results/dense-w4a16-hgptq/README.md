@@ -1,5 +1,12 @@
 # Online block-Hadamard All-W4 Cholesky GPTQ (`Qwen3.5-2B`) — 2026-11-06
 
+## Summary
+
+- **Always turn on `H=64` Hadamard rotation:** It adds zero bytes on disk and cuts language KL divergence by `16%–24%` (`32%–40%` on held-out guard prompts) across every group size tested.
+- **Rotation beats shrinking group size for free:** Rotated `g128-h64` (`1.815 GiB`) beats unrotated `g64-h0` and `g32-h0` on every text metric while taking less memory; `g64-h64` hits the best quality-per-byte tradeoff and is our default 4-bit recipe.
+- **The same `g64-h64` recipe scales cleanly across the whole lineup:** Later sections validate it on `9B`, `27B`, `35B-A3B` MoE, Vision (`97.45%` top-1, matching 8-bit Vision), Native MTP (`91.9%–96.6%` top-1), and `DFlash2` speculative drafters (`99.8%` of BF16 acceptance length).
+- **Historical note:** This is the original `g64-h64` ablation study. Published checkpoints later added Hessian Coordinate Descent (`H-CD`), FP32-master Norm/GDN KL QAT, and 8-bit untied output heads (`W8_g64`) — see [`COMPARISON.md`](COMPARISON.md) and each model's `TECHNICAL.md` for final shipped numbers.
+
 **Full 3×3 factorial (`g128, g64, g32` × `H=0, 64, 128`) across all 255 quantizable linear layers (`150` language, `7` Native MTP, `98` Vision; `248` in `model.safetensors` + `7` in `model_mtp.safetensors`) using Cholesky GPTQ and deterministic online Walsh-Hadamard rotation (`QuIPModifier` / $R_4$-style + HadaCore).**
 Online block-Hadamard rotation (`H=64`) adds **zero weight storage overhead** (`0` bytes in safetensors shards; deterministic Hadamard matrices are reconstructed at load time) while reducing Language (`probe-v4`, `probe-guard`), Native MTP, and end-to-end Vision teacher-forced KL across all three group sizes, and reducing isolated ViT KL at `g64` and `g32` (at `g128`, rotation reduces ViT feature RMSE `0.4080 → 0.3515` and end-to-end VLM KL `0.0748 → 0.0673`, while isolated ViT KL rises `0.0136 → 0.0174`):
 - **Language (`probe-v4`, 378 rows / 840,187 tokens)**: `H=64` lowers blend-weighted KL by **23.9% at g128** (`0.1038 → 0.0790`), **16.3% at g64** (`0.0869 → 0.0728`), and **17.0% at g32** (`0.0774 → 0.0642`), winning **360/378, 347/378, and 351/378 rows**, respectively. Notably, **`g128-h64` beats unrotated `g64-h0` and `g32-h0` on token-mean KL (`0.2680` vs `0.2874` / `0.2759`) and perplexity delta (`+1.897%` vs `+4.917%` / `+5.464%`) while saving 26.1–78.3 MiB of weight storage**.

@@ -1,6 +1,13 @@
-# 7-Arm Cross-Format Comparison (`Qwen3.8-27B` & `Qwen3.5-9B`)
+# Cross-Format Comparison (`Qwen3.8-27B` & `Qwen3.5-9B`)
 
-Controlled evaluation comparing `W4A16-HGPTQ` and `W2.6A16-HGPTQ-RCO` (`nchapman/*`) against `ExLlamaV3` (`EXL3` trellis `4.00 bpw` / `3.00 bpw`), Unsloth Dynamic `GGUF` (`UD-Q4_K_XL` / `UD-Q2_K_XL`), and the unquantized `BF16` reference across both **`Qwen/Qwen3.8-27B`** and **`Qwen/Qwen3.5-9B`**.
+Controlled evaluation comparing `W4A16-HGPTQ` and `W2.6A16-HGPTQ-RCO` (`nchapman/*`) against `ExLlamaV3` (`EXL3` trellis `4.00 bpw` / `3.00 bpw` / `2.50 bpw`), Unsloth Dynamic `GGUF` (`UD-Q4_K_XL` / `UD-Q2_K_XL`), and the unquantized `BF16` reference across both **`Qwen/Qwen3.8-27B`** and **`Qwen/Qwen3.5-9B`**.
+
+## Summary
+
+- **At 4-bit, our quant ties BF16, Unsloth `UD-Q4_K_XL`, and `EXL3 4.0bpw` — while using a smaller text backbone than Unsloth and bundling Vision + MTP.** Across all 1,205 EvalScope prompts (`IFEval`, `MATH-500`, `HumanEval+`), every 95% confidence interval between `BF16`, `W4A16-HGPTQ`, `EXL3 4.0bpw`, and `UD-Q4_K_XL` crosses zero (`27B`: `85.99%` vs. `86.90%` BF16 / `86.25%` EXL3 / `85.84%` Unsloth; `9B`: `83.35%` vs. `84.41%` BF16 / `83.16%` EXL3 / `84.54%` Unsloth).
+- **Why Unsloth `UD-Q4_K_XL` has slightly lower raw KL:** Over half of its backbone is promoted to 5-, 6-, and 8-bit (`5.11–5.26 bpw`, `16%–19%` larger text backbone than our `4.26 bpw`), while it shrinks embeddings to 4-bit and leaves Vision out in a separate `mmproj` file. Even with those extra bits, downstream benchmark scores are statistically tied.
+- **Below 3 bits, V2 (`HGPTQ-RCO` `D1`) recovered `+12.72 pp` on `9B` and `+3.29 pp` on `27B` without adding 3-bit kernels.** Moving to symmetric mid-riser 2-bit (`w2_g128_sym`), larger `H_512` rotation, and clean-BF16 norm anchoring pushed `9B` `W2.6` V2 to **`75.74%`** (`2.86 bpw`) — **beating Unsloth `UD-Q2_K_XL` (`73.12%` at `3.13 bpw`)** using fewer bits — and lifted `27B` `W2.6` V2 to **`82.87%`** (`2.87 bpw`), closing most of the gap to `UD-Q2_K_XL` (`85.46%`) and `EXL3 3.0bpw` (`85.65%`) while staying strictly `2/4/8`-bit for `warp34` and `vLLM` Marlin.
+- **What caused the V1 sub-3-bit gap:** Diagnostic controls proved it wasn't a raw bit-budget cliff (`EXL3 2.5bpw` scored `76.68%` at `2.52 bpw`) or a vLLM W2 Marlin bug (pure-BF16 dequantized weights reproduced the exact same V1 score). It came from the old asymmetric 2-bit grid and an `all_low`-anchored QAT bug — both fixed in V2. *(Tables below retain both original V1 rows and the published V2 rows for traceability.)*
 
 - **Machine-readable receipts (including 20,000-draw paired bootstrap CIs & per-domain KL)**:
   - `27B`: [`27b-g64-h64/probe_comparison.json`](27b-g64-h64/probe_comparison.json) · [`27b-g64-h64/evalscope_comparison.json`](27b-g64-h64/evalscope_comparison.json)

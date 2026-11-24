@@ -1,5 +1,11 @@
 # Qwen3.5-2B Sub-3-Bit & 4-Bit Optimization (`All-W2`, `All-W4`, and `10%–30%` `H-RCO`)
 
+## Summary
+
+- **Pure 2-bit only becomes usable after Scale/Norm KL tuning:** Adding end-to-end scale and `RMSNorm` tuning cuts pure 2-bit (`367.9 MiB` text) perplexity degradation from `+92.0%` down to `+27.1%` (`val KL 1.015 → 0.540`).
+- **25%–30% mixed 2-bit/4-bit is the sweet spot:** Upgrading the top `30%` of layers to 4-bit (`2.60 bpw`, `465.9 MiB` text — `33%` smaller than pure 4-bit) brings `probe-v4` perplexity within `+6.2%` of BF16 (`4.076` vs. `3.837`), and `25%` (`2.50 bpw`, `449.4 MiB`) sits close behind at `+7.8%`.
+- **The same polish also makes pure 4-bit sharper:** Adding 2-pass Hessian Coordinate Descent (`H-CD`) + FP32-master `RMSNorm` KL tuning cuts pure 4-bit `probe-v4` weighted KL from `0.0728` down to `0.0581` at the exact same `694.9 MiB` size.
+
 Full teacher-forced fidelity receipts (`probe-v4`, `probe-guard`, and Native `MTP`) for `Qwen/Qwen3.5-2B` across:
 1. **Pure 2-Bit (`All-W2-g64-h64`, `2.00` bits, `367.9 MiB` text body):**
    - `all_w2_hcd`: $H_{64}$ block Walsh–Hadamard rotation + MSE grid initialization + Cholesky GPTQ (`actorder="static"`, `group_size=64`) + 4-pass Gauss–Seidel Hessian Coordinate Descent (`refine_hessian_cd`).

@@ -1,5 +1,10 @@
 # `Qwen/Qwen3.6-35B-A3B` `W2/W4` `HGPTQ-RCO` (`16 GB` Target) Receipt Summary
 
+## Summary
+
+- **Fits the full 256-expert `35B-A3B` multimodal MoE model on a single 16 GB GPU:** Keeping every always-active layer (attention, shared experts, Vision, and Native MTP) in 4-bit while mixing 2-bit and 4-bit across routed experts cuts the `66.97 GiB` BF16 model by `>5×` down to ~`13 GiB` (vs. `18.78 GiB` for pure 4-bit on 24 GB GPUs).
+- **Updated V2 checkpoint shipped:** The table below shows the original V1 (`25%` W4, `g64-h64`, `13.15 GiB`) baseline vs. pure `W4A16`. The current published V2 checkpoint (`12/40` W4 routed layers, `w2_g128_sym` + `H_512`) is even smaller and sharper at **`13.01 GiB`** (`0.1784` `probe-v4` weighted KL, `0.1614` `probe-guard` mean KL, **`86.10%` EvalScope 3-benchmark mean**) — see [`TECHNICAL-W2.6A16-HGPTQ-RCO.md`](TECHNICAL-W2.6A16-HGPTQ-RCO.md).
+
 | Allocation | Published Checkpoint | Routed Expert Bits | Backbone Avg Bits | Safetensors Size | `probe-v4` PPL (`Δ%`) | `probe-v4` Weighted KL (`Mean KL`) | `probe-guard` Weighted KL (`Mean KL`) | Native MTP Iso KL (`Top-1`) | Vision `v2` Iso KL (`Top-1`) | Vision `v2` Guard Iso KL (`Top-1`) |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | **`25pct_rco` (`16 GB` Target)** | [`nchapman/Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO) | `2.50 bpw` (`30` W2 / `10` W4 layers) | `2.62 bpw` | **`13.15 GiB`** (`14,121,080,536 B`) | `4.0208 → 3.7230` (`-7.407%`) | **`0.212116`** (`0.388539`) | **`0.208017`** (`0.194310`) | `0.010490` (`95.80%`) | `0.007169` (`99.34%`) | `0.004848` (`98.52%`) |

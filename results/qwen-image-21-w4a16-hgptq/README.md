@@ -18,6 +18,12 @@ tags:
 
 # Qwen-Image-2.1 — W4A16-HGPTQ (`g64-h64` + Multimodal DeepStack/Trajectory HGPTQ + Norm/Velocity QAT)
 
+## Summary
+
+- **What it is:** A 4-bit quantization of [`Qwen/Qwen-Image-2.1`](https://huggingface.co/Qwen/Qwen-Image-2.1), Qwen's 16B bilingual (English + Chinese) text-to-image and image-editing diffusion pipeline (`Qwen3VL` text/vision encoder + 32-block DiT + BF16 VAE).
+- **Fits on 12–16 GB GPUs:** Shrinks the full pipeline from `32.45 GiB` in BF16 down to **`9.82 GiB`** (`3.31×` smaller: `5.44 GiB` text encoder + `3.75 GiB` DiT + `0.63 GiB` BF16 VAE).
+- **Near-identical image quality:** Calibrated on real multi-aspect-ratio T2I and image-editing denoising trajectories, retaining `0.9991` teacher-forced velocity cosine (`28.85 dB` SQNR) and **`26.97 dB`** end-to-end decoded-image PSNR (**`36.61 dB`** on image-to-image editing) against the 16-bit pipeline.
+
 This repository contains a **9.82 GiB** (`3.31×` compressed from `32.45 GiB` BF16) **`W4A16-HGPTQ`** quantization of [`Qwen/Qwen-Image-2.1`](https://huggingface.co/Qwen/Qwen-Image-2.1) (`d26bb61231c349cf6b7896fa83353113880e1ba3`) produced with [`warp-quant`](https://github.com/nchapman/warp34-quant-lab).
 
 ## Recipe Summary

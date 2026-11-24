@@ -1,5 +1,15 @@
 # Consumer GPU `128K`-Context (`--kv-pages 8192`) Fit, Throughput & Safety Buffer Guide (`warp34`)
 
+## Summary
+
+- **Every consumer GPU tier gets a `128K`-context checkpoint that still leaves room for LoRA adapters and a desktop OS:**
+  - **8 GB GPU (`RTX 4060`):** `Qwen3.5-9B-W2.6A16-HGPTQ-RCO` (`6,153 MiB` with `128K` `tq4` KV cache, `+935 MiB` left after LoRA).
+  - **12 GB GPU (`RTX 3060`):** `Qwen3.5-9B-W4A16-HGPTQ` (`8,835 MiB` with MTP, `+2,411 MiB` left after LoRA), or `Qwen3.8-27B-W2.2A16-HGPTQ-RCO` (`10,883 MiB` at `64K` `tq4_all`).
+  - **16 GB GPU (`RTX 4060 Ti`):** `Qwen3.8-27B-W2.6A16-HGPTQ-RCO` (`14,976 MiB`, `+576 MiB` after LoRA) or `Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO` (`14,934 MiB`, `+221 MiB` after LoRA; `tq4_all` frees another `+264–560 MiB`).
+  - **1× / 2× 24 GB GPU (`RTX 3090`):** `Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO` runs at `26.1 tok/s` on 1× 3090 and **`95–132 tok/s`** with MTP on 2× 3090 (`TP=2`, `62.5%–81.25%` of experts pinned in VRAM, PLE `mmap`'d in system RAM).
+- **Built-in MTP speculative decoding roughly doubles decode speed:** `9B` jumps from `69 → 151.5 tok/s` (`RTX 3060`), `9B-W4` jumps from `53.6 → 120.1 tok/s` (`4060 Ti`), and `35B-A3B` jumps from `123.2 → 190.8 tok/s` (`4060 Ti`).
+- **How `warp34` keeps tight fits safe:** When VRAM headroom drops below `2 GiB`, `warp34` automatically offloads `embed_tokens` to zero-copy pinned host RAM (`<1 µs` lookup, zero decode slowdown), trims GDN state slots, and enforces a hard `1 GiB` safety floor.
+
 Empirical `warp34` (`ghcr.io/nchapman/warp34:dev`) capacity planning, throughput benchmarks, and VRAM safety buffer analysis for **`8 GB`**, **`12 GB` (`RTX 3060`)**, **`16 GB` (`RTX 4060 Ti`)**, and **`1× / 2× 24 GB` (`RTX 3090`, `TP=1` & `TP=2`)** consumer GPUs at **`128K` context (`131,072` tokens = `--kv-pages 8192`)** with TurboQuant 4-bit KV cache (`--kv-format tq4` and `tq4_all`), Native `MTP` speculative decoding (`--speculative mtp --mtp-k 3`), Multi-LoRA adapters (`--lora`), and Desktop OS environments (Windows 11 DWM / WSL2 and Linux Wayland / X11).
 
 Machine-readable receipts: [`consumer_gpu_128k_matrix.json`](consumer_gpu_128k_matrix.json).

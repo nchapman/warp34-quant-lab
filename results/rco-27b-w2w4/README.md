@@ -1,5 +1,12 @@
 # Qwen3.8-27B Sub-3-Bit & 4-Bit `H-RCO` + `W8_g64` Head Pareto Sweep (`0%`, `10%–30%` `W2/W4`, and `100%` `All-W4`)
 
+## Summary
+
+- **Quantizing the untied output head (`lm_head` + `mtp.fc`) to 8-bit saves `1.20 GiB` for free:** Switching those two projections from BF16 to `W8_g64` changed `probe-v4` weighted KL by only `+0.000011`.
+- **30% mixed 2-bit/4-bit brings a 27B multimodal model onto a single 16 GB GPU:** At `12.18 GiB` full VLM+MTP (`~3.8 GiB` free on a 16 GB card), this V1 sweep retained `88.7%` end-to-end Vision top-1 and `74.5%` end-to-end MTP agreement; `10%–20%` text-only variants fit on headless 12 GB cards.
+- **Pure 4-bit got both smaller and more accurate:** Combining `H-CD`, Norm KL QAT, and the 8-bit head shrank `27B` `W4A16-HGPTQ` from `17.61 GiB` to `16.14 GiB` while cutting `probe-v4` weighted KL by `13.6%` (`0.1160 → 0.1002`) and lifting MTP top-1 from `87.1%` to `89.2%`.
+- **Looking for the published V2 checkpoints?** This page records the original V1 `g64-h64` sweep. The shipped V2 checkpoints (`w2_g128_sym` + `H_512`) are [`W2.6` (`12.20 GiB`, `82.87%` EvalScope mean)](TECHNICAL-W2.6A16-HGPTQ-RCO.md) for 16 GB GPUs and [`W2.2` (`11.06 GiB`, `78.00%` EvalScope mean)](TECHNICAL-W2.2A16-HGPTQ-RCO.md) for 12 GB GPUs.
+
 Full teacher-forced fidelity receipts (`probe-v4`, `probe-guard`, Native `MTP`, `vision-probe-v2`, and `vision-guard-v2`) for `Qwen/Qwen3.8-27B` calibrated on `data/calib-cascade-v1.jsonl` (`512×4096` bank, `935`-sequence E2E Scale-QAT, `64×2048` Riemannian search, `data/vision-calib-v2` Vision, and unrotated `W8_g64` `GPTQ+MSE` on untied `lm_head` + `mtp.fc`):
 
 ```bash

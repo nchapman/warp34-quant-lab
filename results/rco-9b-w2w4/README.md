@@ -1,5 +1,11 @@
 # Qwen3.5-9B Sub-3-Bit & 4-Bit `H-RCO` Pareto Sweep (`0%`, `10%–35%` `W2/W4`, and `100%` `All-W4`)
 
+## Summary
+
+- **30% mixed 2-bit/4-bit is the quality/size knee in this V1 (`g64-h64`) sweep:** Upgrading the top `30%` of layers to 4-bit (`2.60 bpw`) keeps held-out `probe-guard` perplexity within `+0.45%` of BF16 (`10.61` vs. `10.56`) while retaining `90.7%` end-to-end Vision top-1 and `77.3%` end-to-end MTP agreement.
+- **Pure 4-bit also improved:** Adding `H-CD` + `RMSNorm` KL QAT cut `probe-v4` mean KL from `0.2199` to `0.1897` and lifted end-to-end MTP top-1 from `86.81%` to `87.82%`.
+- **Looking for the published V2 checkpoint?** This page records the original V1 `g64-h64` sweep. The shipped **`5.55 GiB`** V2 model (`w2_g128_sym` + `H_512`, `36.75%` W4, **`75.74%`** EvalScope mean, fits on an 8 GB GPU) is documented in [`README-W2.6A16-HGPTQ-RCO.md`](README-W2.6A16-HGPTQ-RCO.md) and [`TECHNICAL-W2.6A16-HGPTQ-RCO.md`](TECHNICAL-W2.6A16-HGPTQ-RCO.md).
+
 Full teacher-forced fidelity receipts (`probe-v4`, `probe-guard`, Native `MTP`, `vision-probe-v2`, and `vision-guard-v2`) for `Qwen/Qwen3.5-9B` calibrated on `data/calib-cascade-v1.jsonl` (`512×4096` bank, `935`-sequence E2E Scale-QAT, `64×2048` Riemannian search, `data/vision-calib-v2` Vision):
 
 ```bash

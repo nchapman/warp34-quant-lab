@@ -1,5 +1,12 @@
 # Layer-1 N-Gram Per-Layer Embedding (PLE) Quantization Design (`Qwen3.8-Flash-Next`)
 
+## Summary
+
+- **Why this table had to be compressed to 4-bit:** `Qwen3.8-Flash-Next` has a `51.2B`-parameter (`95.37 GiB` BF16) N-gram hash table in Layer 1. At 8-bit (`~48 GiB`), the table plus the quantized backbone (`~114 GiB` total) overflows a `96 GB` GPU and thrashes host RAM. Compressing it to 4-bit (`26.82 GiB`, `92.84 GiB` full model) makes the whole 180B model fit cleanly with room for KV cache.
+- **Why off-the-shelf compression fails:** Every row is active (`0%` dead rows), its singular values are nearly flat (so low-rank SVD loses too much accuracy), and normal activation-calibrated GPTQ touches `<0.1%` of the 320 million hash rows.
+- **What worked (`Custom-LUT4` + `W_kv`-HGPTQ):** Because the table only feeds `key_proj` and `value_proj`, we use those projection weights directly as an exact analytical Hessian — no calibration data needed — paired with a 16-entry non-uniform 4-bit lookup table (`g32`). That cuts `key_proj` error by **`29.6%` vs. `NVFP4`** (`6.655%` vs. `9.449%` Rel-RMSE) and **`22.3%` vs. 5-bit-effective `INT4 g16`**.
+- **Zero wasted disk/RAM reads:** Each quantized row is `90 B`, so `45` complete rows fit inside one `4 KiB` OS memory page (`98.9%` fill, `0%` page splits vs. `29.9%` with unaligned rows), letting `warp34` stream lookups via `mmap` with a single page fetch per head.
+
 This document records the empirical analysis, alternatives evaluated, and design rationale behind the **4-bit `Custom-LUT4` (`group_size=32`) + Analytical Downstream `W_kv`-HGPTQ + 1-Pass Coordinate Descent + 4 KiB Page-Slotted Layout** used for the `51.2B`-parameter Layer-1 Per-Layer Embedding (PLE) table in [`nchapman/Qwen3.8-Flash-Next-W4A16-HGPTQ`](README.md).
 
 ---
