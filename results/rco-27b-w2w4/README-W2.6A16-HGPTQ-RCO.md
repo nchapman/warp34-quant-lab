@@ -1,72 +1,46 @@
 ---
 base_model: Qwen/Qwen3.8-27B
+base_model_relation: quantized
 license: apache-2.0
 library_name: transformers
 quantized_by: nchapman
 tags:
 - gptq
 - hadamard
-- quip
 - w2a16
 - w4a16
 - compressed-tensors
 - vllm
+- warp34
 ---
 
 # Qwen3.8-27B-W2.6A16-HGPTQ-RCO
 
-Mixed 2-bit / 4-bit Hadamard + GPTQ (`W2.6A16`, group size 128, `H_512` Walsh–Hadamard rotation, symmetric mid-riser `code_offset=0.5` 2-bit grid) quantization of [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) built with Riemannian Co-design (`HGPTQ-RCO`). It compresses the 51.8 GiB BF16 model down to **12.20 GiB** (`8.15 GiB` pure text backbone; 4.24× smaller; `11.74 GiB` text-only) so the full multimodal model and Native MTP drafter fit on a single **16 GB GPU** (RTX 4060 Ti 16GB / 4070 Ti Super / 4080 / 5060 Ti 16GB / 5070 Ti).
+A compact sub-3-bit quantized version of [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B), Qwen's flagship 27B multimodal model for coding, reasoning, instruction following, and vision. It brings a full 27B-class model—with vision and built-in speculative decoding intact—down to a single **16 GB GPU**.
 
-- **VRAM & GPU fit:** `12.20 GiB` full VLM+MTP (`11.74 GiB` text-only; `8.15 GiB` pure text backbone), leaving ~3.8 GiB on a 16 GB card for KV cache, vision tokens, speculative decoding, and CUDA graphs.
-- **Quantization recipe:** Upgrades `177 / 400` backbone linears (`36.75%` parameter budget, fused `vLLM` groups) to `W4_g128` (`H_512`), quantizes the remaining `223 / 400` backbone linears to symmetric mid-riser `W2_g128` (`code_offset=0.5`, codes `{-1.5, -0.5, +0.5, +1.5}`), keeps Vision and Native MTP transformer blocks in `W4_g64` (`lm_head` and `mtp.fc` in `W8_g64`), and polishes `W2` scales + FP32-master `RMSNorm`/GDN gates from clean GPTQ weights via end-to-end KL QAT.
-- **Fidelity vs. BF16:** `0.2691` weighted KL (`0.4321` mean KL) on `probe-v4`, `0.3168` mean KL (`0.4343` weighted KL) on the `probe-guard` holdout, `96.84%` / `72.91%` isolated/E2E MTP top-1 agreement, and `98.34%` / `88.74%` isolated/E2E vision top-1 agreement (`97.78%` / `88.15%` on `vision-guard-v2`).
-- **Downstream EvalScope (Full `N=1,205`, greedy `temp=0.0`, `enable_thinking=False`):** **`82.87%` 3-benchmark mean** (`78.19%` IFEval prompt-strict / `81.40%` MATH-500 / `89.02%` HumanEval+), gaining **`+3.29 pp`** over V1 (`79.58%`, including `+7.92 pp` on HumanEval+ and `+2.96 pp` on IFEval) in strict `2/4/8`-bit.
+## Quickstart
 
-| Variant | Backbone W4 Budget | Pure Text Backbone | Full VLM+MTP Size | Text-Only Size | Target GPU Tier |
-|---|---:|---:|---:|---:|---|
-| [`Qwen3.8-27B-W2.2A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-27B-W2.2A16-HGPTQ-RCO) | `16.5%` `W4` (`103/400`) | `7.00 GiB` | `11.06 GiB` | `10.59 GiB` | Headless `12 GB` (text-only) / ultra-long-context `16 GB` |
-| **`Qwen3.8-27B-W2.6A16-HGPTQ-RCO` (this repo)** | **`36.75%` `W4` (`177/400`)** | **`8.15 GiB`** | **`12.20 GiB`** | **`11.74 GiB`** | **Recommended `16 GB` GPU (full VLM + MTP + CUDA graphs)** |
-| [`Qwen3.8-27B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-27B-W4A16-HGPTQ) | `100%` `W4` (`400/400`) | `12.08 GiB` | `16.14 GiB` | `15.67 GiB` | `24 GB` GPU (RTX 3090 / 4090 / 5090) |
+Built and optimized for [**warp34**](https://github.com/nchapman/warp34) (16 GB RTX 30/40-series GPUs (e.g., RTX 4060 Ti 16 GB / 4070 Ti Super / 4080)):
 
-## Quality vs. BF16 Base Model (`Qwen/Qwen3.8-27B`)
+```bash
+warp34 serve nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO
+```
 
-Teacher-forced evaluation comparing this checkpoint directly against the unquantized BF16 base model:
+Also runs in **vLLM** (`0.34+`):
 
-| Evaluation | BF16 Base (`Qwen/Qwen3.8-27B`) | **`Qwen3.8-27B-W2.6A16-HGPTQ-RCO`** | Notes |
-|---|---:|---:|---|
-| **Safetensors Size** | `51.75 GiB` (`55,563,006,776 B`) | **`12.20 GiB` (`13,102,931,776 B`)** | **`4.24×` compression** (`8.15 GiB` pure text backbone; `11.74 GiB` text-only) |
-| **Text Divergence vs. BF16 (`probe-v4`)** (weighted KL / token mean KL) ↓ | `0.0000` | **`0.2691` / `0.4321`** | 378 prompts, 852k tokens (PPL `8.5332 → 4.4647`; `math` `0.1718`, `chat` `0.1618`, `if` `0.1629`, `science` `0.1799`) |
-| **General & Multilingual Holdout (`probe-guard`)** (token mean KL / weighted KL) ↓ | `0.0000` | **`0.3168` / `0.4343`** | 76 prompts, 23k tokens (PPL `61.0805 → 38.8513`; `no_robots` `0.2221`, 9-lang Belebele macro KL `0.4343`) |
-| **Native MTP (Speculative Drafter)** (12,339 positions) | `100.0%` Top-1 (`NLL 2.9579`) | **`96.84%` Isolated Top-1 (`NLL 2.9741`)** | Isolated MTP KL `0.0087` (end-to-end Top-1 `72.91%`, KL `0.6608`) |
-| **Vision (`vision-probe-v2`)** (96 images, 302 answer tokens) | `100.0%` Top-1 | **`98.34%` Isolated Top-1 · `88.74%` E2E Top-1** | Isolated ViT KL `0.0074`, E2E KL `0.4129` (`vision-guard-v2` Iso Top-1 `97.78%`, E2E Top-1 `88.15%`, KL `0.4889`) |
+```bash
+vllm serve nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO --trust-remote-code
+```
 
-### End-to-End EvalScope Benchmarks (`N=1,205`, greedy `temp=0.0`, `enable_thinking=False`)
+## About this quant
 
-| Model / Checkpoint | Text Backbone (`bpw`) | IFEval (`541`) | MATH-500 (`500`) | HumanEval+ (`164`) | **3-Bench Mean** |
-|---|---:|---:|---:|---:|---:|
-| BF16 Base (`Qwen/Qwen3.8-27B`) | `45.36 GiB` (`16.00`) | `82.62%` | `84.80%` | `93.29%` | **`86.90%`** |
-| `W4A16-HGPTQ` (`nchapman`, `16.14 GiB` full) | `12.09 GiB` (`4.26`) | `81.89%` | `82.80%` | `93.29%` | `85.99%` |
-| Unsloth `UD-Q2_K_XL` (GGUF, mixed `Q2/Q3/Q4`) | `7.87 GiB` (`2.78`) | `81.52%` | `82.80%` | `92.07%` | `85.46%` |
-| **`W2.6A16-HGPTQ-RCO` V2 (strict `2/4/8`-bit, this repo)** | **`8.15 GiB` (`2.87`)** | **`78.19%`** | **`81.40%`** | **`89.02%`** | **`82.87%`** |
-| `W2.6A16-HGPTQ-RCO` V1 (`g64`, `H_64`) | `8.12 GiB` (`2.86`) | `75.23%` | `82.40%` | `81.10%` | `79.58%` |
+- **Fits on a single 16 GB GPU** (`12.20 GiB` on disk vs. `51.8 GiB` in BF16, `4.2×` smaller), leaving room for `128K` context in `warp34`, vision inputs, and speculative decoding.
+- **Smart mixed 2-bit / 4-bit precision (V2):** Keeps the most sensitive `36.75%` of backbone weights—plus the vision encoder and MTP speculative drafter—in 4-bit (with an 8-bit output head), while compressing the rest with symmetric 2-bit quantization.
+- **Strong real-world retention for its size:** Scores `82.87%` across IFEval (`78.2%`), MATH-500 (`81.4%`), and HumanEval+ (`89.0%`) vs. `86.90%` in full 16-bit.
+- **Optimized for [`warp34`](https://github.com/nchapman/warp34):** Uses strictly `2 / 4 / 8`-bit GPU-friendly formats (no slow 3-bit unpacking) so it runs fast out of the box.
 
-## What Is Quantized
+**Need a different size?**
+- **24 GB GPU:** [Qwen3.8-27B-W4A16-HGPTQ](https://huggingface.co/nchapman/Qwen3.8-27B-W4A16-HGPTQ) (`16.14 GiB`, highest quality)
+- **12 GB GPU (or extra context on 16 GB):** [Qwen3.8-27B-W2.2A16-HGPTQ-RCO](https://huggingface.co/nchapman/Qwen3.8-27B-W2.2A16-HGPTQ-RCO) (`11.06 GiB`)
 
-- **Quantized (`519` linear layers total)**:
-  - **Language Backbone (`400` linears across `256` fused `vLLM` groups, `H_512`, `group_size=128`)**:
-    - **`177` linears in `W4A16-HGPTQ` (`w4_g128`)**: Top `36.75%` parameter budget selected via non-myopic Gumbel-Softmax Riemannian Co-design, calibrated with MSE-initialized Cholesky GPTQ + 2-pass Gauss–Seidel Hessian Coordinate Descent (`H-CD`).
-    - **`223` linears in `W2A16-HGPTQ` (`w2_g128_sym`)**: Remaining backbone groups quantized with symmetric mid-riser 2-bit (`code_offset=0.5`, codes `{-1.5, -0.5, +0.5, +1.5}`) `H_512` Cholesky GPTQ + 3-pass `H-CD` and polished end-to-end from clean GPTQ weights via continuous `log_scale` + FP32-master `RMSNorm`/GDN-gate KL distillation on `data/calib-cascade-v1.jsonl`.
-  - **Untied Output Head & MTP Fusion (`2` linears in `W8_g64`)**: `lm_head` (`[248320, 5120]`) and `mtp.fc` (`[5120, 10240]`) quantized to unrotated 8-bit group-64 Cholesky GPTQ (`w8_head`).
-  - **Native MTP (`7` transformer linears in `W4A16-HGPTQ`, `group_size=64`)**: `mtp.layers.0.self_attn.{q,k,v,o}_proj` and `mtp.layers.0.mlp.{gate,up,down}_proj`.
-  - **Vision (`110` linears in `W4A16-HGPTQ`)**: All 27 ViT blocks + 2 spatial merger projections (`visual.blocks.*.mlp.linear_fc2` uses per-channel Cholesky GPTQ + `head_dim=16` `v_vision_fc2`; other Vision linears use `group_size=64` + `head_dim=128`).
-- **Kept in BF16**:
-  - `embed_tokens`, `linear_attn.in_proj_a`, `linear_attn.in_proj_b`, `visual.patch_embed.proj`, norms, and biases.
-- **Default sampling** (`generation_config.json`) & **release chat template** (`chat_template.jinja`): `temperature 1.0, top_p 0.95, top_k 20` (`eos_token_id: [248046, 248044]`, `pad_token_id: 248044`).
-
-## Runtime & vLLM Notes
-
-- **Zero-patch `vLLM` + Hugging Face `compressed-tensors` compatibility**:
-  - Uses standard `pack-quantized` int32 shards with `w2_g128_sym` (`num_bits: 2`, `code_offset: 0.5`), `w4_g128` / `group_0` (`num_bits: 4`), `vision_fc2_channel` (`num_bits: 4`), and `w8_head` (`num_bits: 8`) config groups, plus bundled `vllm_warp_quant.py` auto-loader.
-  - Serve with `VLLM_WARP_QUANT_W2_MARLIN=1` for full-speed Machete/Marlin CUDA-graph kernels (lossless `uint4b8` repack of the `code_offset=0.5` grid), or default mode for minimum true 2-bit VRAM (`12.20 GiB`).
-- **Online Input Hadamard Transform (`transform_config`)**:
-  - Quantized backbone linears use `head_dim=512` Sylvester Walsh–Hadamard rotation (`v`); Vision and MTP use compatible block sizes (`v_vision`, `v_vision_fc2`).
+*Benchmarks, evaluation receipts, and quantization details: [Technical Report](TECHNICAL.md) · [`warp34-quant-lab`](https://github.com/nchapman/warp34-quant-lab).*

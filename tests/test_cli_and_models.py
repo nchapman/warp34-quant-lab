@@ -203,71 +203,71 @@ def test_model_cards_match_published_receipts() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     pairs = [
         (
-            "results/dense-w4a16-hgptq/0.8b-g64-h64/README.md",
+            "results/dense-w4a16-hgptq/0.8b-g64-h64/TECHNICAL.md",
             "results/dense-w4a16-hgptq/0.8b-g64-h64/probe_results.json",
         ),
         (
-            "results/dense-w4a16-hgptq/g64-h64/README.md",
+            "results/dense-w4a16-hgptq/g64-h64/TECHNICAL.md",
             "results/dense-w4a16-hgptq/g64-h64/probe.json",
         ),
         (
-            "results/dense-w4a16-hgptq/4b-g64-h64/README.md",
+            "results/dense-w4a16-hgptq/4b-g64-h64/TECHNICAL.md",
             "results/dense-w4a16-hgptq/4b-g64-h64/probe_results.json",
         ),
         (
-            "results/dense-w4a16-hgptq/9b-g64-h64/README.md",
+            "results/dense-w4a16-hgptq/9b-g64-h64/TECHNICAL.md",
             "results/dense-w4a16-hgptq/9b-g64-h64/probe.json",
         ),
         (
-            "results/dense-w4a16-hgptq/9b-ornith-g64-h64/README.md",
+            "results/dense-w4a16-hgptq/9b-ornith-g64-h64/TECHNICAL.md",
             "results/dense-w4a16-hgptq/9b-ornith-g64-h64/probe_results.json",
         ),
         (
-            "results/dense-w4a16-hgptq/27b-g64-h64/README.md",
+            "results/dense-w4a16-hgptq/27b-g64-h64/TECHNICAL.md",
             "results/dense-w4a16-hgptq/27b-g64-h64/probe.json",
         ),
         (
-            "results/dense-w4a16-hgptq/27b-swift-g64-h64/README.md",
+            "results/dense-w4a16-hgptq/27b-swift-g64-h64/TECHNICAL.md",
             "results/dense-w4a16-hgptq/27b-swift-g64-h64/probe_results.json",
         ),
         (
-            "results/qwen36-35b-a3b-w4a16-hgptq/README.md",
+            "results/qwen36-35b-a3b-w4a16-hgptq/TECHNICAL.md",
             "results/qwen36-35b-a3b-w4a16-hgptq/probe_results.json",
         ),
         (
-            "results/ornith-15-35b-a3b-w4a16-hgptq/README.md",
+            "results/ornith-15-35b-a3b-w4a16-hgptq/TECHNICAL.md",
             "results/ornith-15-35b-a3b-w4a16-hgptq/probe_results.json",
         ),
         (
-            "results/rco-9b-w2w4/README-W2.6A16-HGPTQ-RCO.md",
+            "results/rco-9b-w2w4/TECHNICAL-W2.6A16-HGPTQ-RCO.md",
             "results/rco-9b-w2w4/v2_receipts/probe_9b_w26_v2.json",
         ),
         (
-            "results/ornith-15-9b-w26a16-hgptq-rco/README.md",
+            "results/ornith-15-9b-w26a16-hgptq-rco/TECHNICAL.md",
             "results/ornith-15-9b-w26a16-hgptq-rco/v2_receipts/probe_9b_ornith_w26_v2.json",
         ),
         (
-            "results/rco-27b-w2w4/README-W2.6A16-HGPTQ-RCO.md",
+            "results/rco-27b-w2w4/TECHNICAL-W2.6A16-HGPTQ-RCO.md",
             "results/rco-27b-w2w4/v2_receipts/probe_37pct_rco.json",
         ),
         (
-            "results/rco-27b-w2w4/README-W2.2A16-HGPTQ-RCO.md",
+            "results/rco-27b-w2w4/TECHNICAL-W2.2A16-HGPTQ-RCO.md",
             "results/rco-27b-w2w4/v2_receipts/probe_16pct_rco.json",
         ),
         (
-            "results/rco-35b-w2w4/README-W2.6A16-HGPTQ-RCO.md",
+            "results/rco-35b-w2w4/TECHNICAL-W2.6A16-HGPTQ-RCO.md",
             "results/rco-35b-w2w4/v2_receipts/probe_35b_w26_v2.json",
         ),
         (
-            "results/ornith-15-35b-a3b-w26a16-hgptq-rco/README.md",
+            "results/ornith-15-35b-a3b-w26a16-hgptq-rco/TECHNICAL.md",
             "results/ornith-15-35b-a3b-w26a16-hgptq-rco/v2_receipts/probe_35b_ornith_w26_v2.json",
         ),
         (
-            "results/qwen38-flash-next-w4a16-hgptq/README.md",
+            "results/qwen38-flash-next-w4a16-hgptq/TECHNICAL.md",
             "results/qwen38-flash-next-w4a16-hgptq/probe_results.json",
         ),
         (
-            "results/qwen38-flash-next-w26a16-hgptq-rco/README.md",
+            "results/qwen38-flash-next-w26a16-hgptq-rco/TECHNICAL.md",
             "results/qwen38-flash-next-w26a16-hgptq-rco/v2_receipts/probe_flash_next_w26_v2.json",
         ),
     ]
@@ -298,3 +298,142 @@ def test_model_cards_match_published_receipts() -> None:
             f"{vg['e2e']['top1_agreement'] * 100:.2f}%",
         ):
             assert expected_table in md, f"{md_rel} table missing {expected_table}"
+
+
+def test_published_user_model_cards_have_frontmatter_and_technical_reports() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    card_pairs = [
+        (
+            "results/dense-w4a16-hgptq/0.8b-g64-h64/README.md",
+            "results/dense-w4a16-hgptq/0.8b-g64-h64/TECHNICAL.md",
+        ),
+        ("results/dense-w4a16-hgptq/g64-h64/README.md", "results/dense-w4a16-hgptq/g64-h64/TECHNICAL.md"),
+        (
+            "results/dense-w4a16-hgptq/4b-g64-h64/README.md",
+            "results/dense-w4a16-hgptq/4b-g64-h64/TECHNICAL.md",
+        ),
+        (
+            "results/dense-w4a16-hgptq/9b-g64-h64/README.md",
+            "results/dense-w4a16-hgptq/9b-g64-h64/TECHNICAL.md",
+        ),
+        (
+            "results/dense-w4a16-hgptq/27b-g64-h64/README.md",
+            "results/dense-w4a16-hgptq/27b-g64-h64/TECHNICAL.md",
+        ),
+        ("results/qwen36-35b-a3b-w4a16-hgptq/README.md", "results/qwen36-35b-a3b-w4a16-hgptq/TECHNICAL.md"),
+        (
+            "results/qwen38-flash-next-w4a16-hgptq/README.md",
+            "results/qwen38-flash-next-w4a16-hgptq/TECHNICAL.md",
+        ),
+        (
+            "results/rco-9b-w2w4/README-W2.6A16-HGPTQ-RCO.md",
+            "results/rco-9b-w2w4/TECHNICAL-W2.6A16-HGPTQ-RCO.md",
+        ),
+        (
+            "results/ornith-15-9b-w26a16-hgptq-rco/README.md",
+            "results/ornith-15-9b-w26a16-hgptq-rco/TECHNICAL.md",
+        ),
+        (
+            "results/rco-27b-w2w4/README-W2.6A16-HGPTQ-RCO.md",
+            "results/rco-27b-w2w4/TECHNICAL-W2.6A16-HGPTQ-RCO.md",
+        ),
+        (
+            "results/rco-27b-w2w4/README-W2.2A16-HGPTQ-RCO.md",
+            "results/rco-27b-w2w4/TECHNICAL-W2.2A16-HGPTQ-RCO.md",
+        ),
+        (
+            "results/rco-35b-w2w4/README-W2.6A16-HGPTQ-RCO.md",
+            "results/rco-35b-w2w4/TECHNICAL-W2.6A16-HGPTQ-RCO.md",
+        ),
+        (
+            "results/ornith-15-35b-a3b-w26a16-hgptq-rco/README.md",
+            "results/ornith-15-35b-a3b-w26a16-hgptq-rco/TECHNICAL.md",
+        ),
+        (
+            "results/qwen38-flash-next-w26a16-hgptq-rco/README.md",
+            "results/qwen38-flash-next-w26a16-hgptq-rco/TECHNICAL.md",
+        ),
+        (
+            "results/dense-w4a16-hgptq/9b-ornith-g64-h64/README.md",
+            "results/dense-w4a16-hgptq/9b-ornith-g64-h64/TECHNICAL.md",
+        ),
+        (
+            "results/ornith-15-35b-a3b-w4a16-hgptq/README.md",
+            "results/ornith-15-35b-a3b-w4a16-hgptq/TECHNICAL.md",
+        ),
+        ("results/apex-35b-v1-w4a16-hgptq/README.md", "results/apex-35b-v1-w4a16-hgptq/TECHNICAL.md"),
+        (
+            "results/dense-w4a16-hgptq/27b-swift-g64-h64/README.md",
+            "results/dense-w4a16-hgptq/27b-swift-g64-h64/TECHNICAL.md",
+        ),
+        ("results/arete-27b-w4a16-hgptq/README.md", "results/arete-27b-w4a16-hgptq/TECHNICAL.md"),
+        ("results/daisyrose-27b-w4a16-hgptq/README.md", "results/daisyrose-27b-w4a16-hgptq/TECHNICAL.md"),
+        ("results/sabi-noema-w4a16-hgptq/README.md", "results/sabi-noema-w4a16-hgptq/TECHNICAL.md"),
+        (
+            "results/dense-w4a16-hgptq/dflash2-27b-README.md",
+            "results/dense-w4a16-hgptq/dflash2-27b-TECHNICAL.md",
+        ),
+        (
+            "results/dense-w4a16-hgptq/dflash2-flash-next-README.md",
+            "results/dense-w4a16-hgptq/dflash2-flash-next-TECHNICAL.md",
+        ),
+        ("results/decision-w4a16-hgptq/d3/README.md", "results/decision-w4a16-hgptq/d3/TECHNICAL.md"),
+        (
+            "results/decision-w4a16-hgptq/d3-ultra/README.md",
+            "results/decision-w4a16-hgptq/d3-ultra/TECHNICAL.md",
+        ),
+        (
+            "results/decision-w4a16-hgptq/d3-turbo/README.md",
+            "results/decision-w4a16-hgptq/d3-turbo/TECHNICAL.md",
+        ),
+        (
+            "results/decision-w4a16-hgptq/d3-flash/README.md",
+            "results/decision-w4a16-hgptq/d3-flash/TECHNICAL.md",
+        ),
+        (
+            "results/decision-w4a16-hgptq/d3-edge/README.md",
+            "results/decision-w4a16-hgptq/d3-edge/TECHNICAL.md",
+        ),
+        (
+            "results/decision-w4a16-hgptq/d3-mini/README.md",
+            "results/decision-w4a16-hgptq/d3-mini/TECHNICAL.md",
+        ),
+        (
+            "results/decision-w4a16-hgptq/d3-nano/README.md",
+            "results/decision-w4a16-hgptq/d3-nano/TECHNICAL.md",
+        ),
+        (
+            "results/decision-w4a16-hgptq/d3-lite/README.md",
+            "results/decision-w4a16-hgptq/d3-lite/TECHNICAL.md",
+        ),
+        (
+            "results/decision-w4a16-hgptq/glide-27b/README.md",
+            "results/decision-w4a16-hgptq/glide-27b/TECHNICAL.md",
+        ),
+        (
+            "results/decision-w4a16-hgptq/glide-9b/README.md",
+            "results/decision-w4a16-hgptq/glide-9b/TECHNICAL.md",
+        ),
+        (
+            "results/decision-w4a16-hgptq/glide-2b/README.md",
+            "results/decision-w4a16-hgptq/glide-2b/TECHNICAL.md",
+        ),
+        (
+            "results/decision-w4a16-hgptq/glide-0.8b/README.md",
+            "results/decision-w4a16-hgptq/glide-0.8b/TECHNICAL.md",
+        ),
+    ]
+    for readme_rel, tech_rel in card_pairs:
+        readme_text = (repo_root / readme_rel).read_text(encoding="utf-8")
+        tech_path = repo_root / tech_rel
+        assert tech_path.exists(), f"Missing technical report: {tech_rel}"
+        assert readme_text.startswith("---\n"), f"{readme_rel} missing YAML frontmatter"
+        assert "base_model_relation: quantized" in readme_text, f"{readme_rel} missing base_model_relation"
+        assert "quantized_by: nchapman" in readme_text, f"{readme_rel} missing quantized_by"
+        assert "## Quickstart" in readme_text, f"{readme_rel} missing Quickstart"
+        assert "## About this quant" in readme_text, f"{readme_rel} missing About this quant"
+        assert "[Technical Report](TECHNICAL.md)" in readme_text, (
+            f"{readme_rel} missing Technical Report link"
+        )
+        tech_text = tech_path.read_text(encoding="utf-8")
+        assert not tech_text.startswith("---\n"), f"{tech_rel} should not carry duplicate YAML frontmatter"

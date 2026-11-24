@@ -1,52 +1,45 @@
 ---
 base_model: ukisai/Swift-1.5-Qwen3.8-27b
-license: apache-2.0
+base_model_relation: quantized
+license: other
+license_name: swift-open-license-1.0
+license_link: https://huggingface.co/ukisai/Swift-1.5-Qwen3.8-27b/blob/main/LICENSE
 library_name: transformers
 quantized_by: nchapman
 tags:
 - gptq
 - hadamard
-- quip
 - w4a16
 - compressed-tensors
 - vllm
+- warp34
 ---
 
 # Swift-1.5-Qwen3.8-27b-W4A16-HGPTQ
 
-4-bit Hadamard + GPTQ (`W4A16`, group size 64) quantization of [ukisai/Swift-1.5-Qwen3.8-27b](https://huggingface.co/ukisai/Swift-1.5-Qwen3.8-27b) across Text, Vision, and the Native MTP speculative drafter. It compresses the 51.8 GiB BF16 fine-tune down to **16.14 GiB** (3.21× smaller), fitting comfortably on a single **24 GB GPU** (RTX 3090 / 4090 / 5090).
+A 4-bit quantized version of [ukisai/Swift-1.5-Qwen3.8-27b](https://huggingface.co/ukisai/Swift-1.5-Qwen3.8-27b), UkisAI's token-efficient reasoning fine-tune of `Qwen3.8-27B`, trained to use substantially fewer thinking tokens while maintaining strong reasoning, coding, and multimodal capability.
 
-- **VRAM & GPU fit:** 16.14 GiB total (saving 35.61 GiB vs. BF16), leaving ~7.8 GiB on a 24 GB card for KV cache, vision tokens, MTP drafting, and CUDA graphs.
-- **Quantization recipe:** 64×64 Walsh–Hadamard input rotation + MSE-initialized Cholesky GPTQ + 2-pass Hessian Coordinate Descent (`H-CD`) + end-to-end FP32-master `RMSNorm` KL tuning, with `lm_head` and `mtp.fc` in 8-bit (`W8_g64`).
-- **Fidelity vs. BF16:** 0.1074 weighted KL (0.2831 mean KL, −5.59% PPL) on `probe-v4`, 0.0555 mean KL (0.0720 weighted KL, −9.49% PPL) on the `probe-guard` holdout, 96.43% / 89.03% isolated/E2E MTP top-1 agreement, and 98.01% / 91.39% isolated/E2E vision top-1 agreement (99.26% / 92.59% on `vision-guard-v2`).
+## Quickstart
 
-## Quality vs. BF16 Base Model (`ukisai/Swift-1.5-Qwen3.8-27b`)
+Built and optimized for [**warp34**](https://github.com/nchapman/warp34) (24 GB RTX 30/40-series GPUs (e.g., RTX 3090 / 4090)):
 
-Teacher-forced evaluation comparing this checkpoint directly against the unquantized BF16 base model:
+```bash
+warp34 serve nchapman/Swift-1.5-Qwen3.8-27b-W4A16-HGPTQ
+```
 
-| Evaluation | BF16 Base (`ukisai/Swift-1.5-Qwen3.8-27b`) | **`Swift-1.5-Qwen3.8-27b-W4A16-HGPTQ`** | Notes |
-|---|---:|---:|---|
-| **Safetensors Size** | `51.75 GiB` (`55,563,006,776 B`) | **`16.14 GiB` (`17,328,747,912 B`)** | **`3.21×` compression** (`−35.61 GiB`) |
-| **Text Perplexity** (378 prompts, 852k tokens) ↓ | `9.6265` | **`9.0881` (`−5.59%`)** | Chat, math, science, coding, tool use, multilingual |
-| **Text Divergence vs. BF16** (weighted KL / token mean KL) ↓ | `0.0000` | **`0.1074` / `0.2831`** | Full-vocabulary FP32 KL divergence |
-| **General & Multilingual Holdout Perplexity** (76 prompts, 23k tokens) ↓ | `79.6973` | **`72.1364` (`−9.49%`)** | Token mean KL `0.0555` (weighted KL `0.0720`) |
-| **Native MTP (Speculative Drafter)** (12,339 positions) | `100.0%` Top-1 (`NLL 3.1061`) | **`96.43%` Top-1 (`NLL 3.1229`)** | Isolated MTP KL `0.0090` (end-to-end Top-1 `89.03%`, KL `0.2086`) |
-| **Vision (VQA, Charts, Documents & OCR)** (96 images, 302 tokens) | `1.0000` cos sim · `100.0%` Top-1 | **`98.01%` Top-1 (`NLL 0.5043`)** | Isolated ViT KL `0.0071` (end-to-end Top-1 `91.39%`, KL `0.1444`) |
-| **Vision (UI / ScreenSpot & Math OCR)** (48 images, 135 tokens) | `1.0000` cos sim · `100.0%` Top-1 | **`99.26%` Top-1 (`NLL 0.8749`)** | Isolated ViT KL `0.0024` (end-to-end Top-1 `92.59%`, KL `0.1440`) |
+Also runs in **vLLM** (`0.34+`):
 
-## What Is Quantized
+```bash
+vllm serve nchapman/Swift-1.5-Qwen3.8-27b-W4A16-HGPTQ --trust-remote-code
+```
 
-- **Quantized (`519` linear layers total)**:
-  - **Language (`400` W4A16 linears + `1` `W8_g64` linear)**: All 64 hybrid GatedDeltaNet + full-attention blocks (`q_proj`, `k_proj`, `v_proj`, `o_proj`, `in_proj_qkv`, `in_proj_z`, `out_proj`, `gate_proj`, `up_proj`, `down_proj`) with online block-Hadamard rotation (`head_dim=64`) + Cholesky GPTQ (`group_size=64`, MSE scale search, 2-pass H-CD) + End-to-End FP32-master `RMSNorm` + GDN-gate KL QAT, plus `lm_head` in unrotated `W8_g64`.
-  - **Native MTP (`7` W4A16 linears + `1` `W8_g64` linear)**: `mtp.layers.0.self_attn.{q,k,v,o}_proj` and `mtp.layers.0.mlp.{gate,up,down}_proj` (`head_dim=64`, `group_size=64`), plus `mtp.fc` in unrotated `W8_g64`.
-  - **Vision (`110` linears)**: All 27 ViT blocks (`visual.blocks.*.{attn.qkv,attn.proj,mlp.linear_fc1,mlp.linear_fc2}`) plus the 2 spatial merger projections (`visual.merger.{linear_fc1,linear_fc2}`). `visual.blocks.*.mlp.linear_fc2` (`K=4304`) uses per-channel Cholesky GPTQ + `head_dim=16` online Hadamard rotation (`v_vision_fc2`); all other Vision linears use `group_size=64` + `head_dim=64`.
-- **Kept in BF16**:
-  - `embed_tokens`, `linear_attn.in_proj_a`, `linear_attn.in_proj_b`, `visual.patch_embed.proj`, norms, and biases.
-- **Default sampling** (`generation_config.json`): `temperature 1.0, top_p 0.95, top_k 20` (`eos_token_id: [248046, 248044]`, `pad_token_id: 248044`).
+## About this quant
 
-## Runtime & vLLM Notes
+- **Fits on a single 24 GB GPU** (`16.14 GiB` on disk vs. `51.75 GiB` in BF16, `3.2×` smaller), leaving ample headroom for long context, vision inputs, and speculative decoding.
+- **Full-model 4-bit calibration:** Text layers, vision encoder, and built-in MTP speculative drafter are calibrated and quantized together (with an 8-bit output head).
+- **Near-BF16 fidelity:** Retains `98.0%` isolated vision top-1 (`99.3%` on UI/OCR guard) and `96.4%` isolated MTP draft agreement against the 16-bit base model.
+- **Optimized for [`warp34`](https://github.com/nchapman/warp34):** Uses standard `4-bit` / `8-bit` packed weights with Hadamard rotation so `warp34` runs full-speed CUDA kernels with zero extra flags.
 
-- **Online Input Hadamard Transform (`transform_config`)**:
-  - Quantized linear layers have weights pre-rotated offline along the input dimension ($W' = W H_b / \sqrt{b}$, where $H_b$ is the deterministic $b \times b$ Sylvester Walsh–Hadamard matrix; $b=64$ for `v` and $b=16$ for `v_vision_fc2`) prior to Cholesky GPTQ quantization.
-  - At runtime, an online block Walsh–Hadamard transform ($x' = x H_b / \sqrt{b}$) is applied to input activations before the W4A16 GEMM (`HadaCore` / `CompressedTensorsLinearTransformMethod`).
-  - Because $H_b$ is deterministic (`randomize: false`), no transform weight matrices are stored in `.safetensors` (`0` storage overhead).
+**Already serving `Qwen3.8-27B` with multi-LoRA?** You can also load the hot-swappable adapter: [Qwen3.8-27B-Swift-1.5-LoRA](https://huggingface.co/nchapman/Qwen3.8-27B-Swift-1.5-LoRA).
+
+*Benchmarks, evaluation receipts, and quantization details: [Technical Report](TECHNICAL.md) · [`warp34-quant-lab`](https://github.com/nchapman/warp34-quant-lab).*

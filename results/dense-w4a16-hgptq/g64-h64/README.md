@@ -1,51 +1,43 @@
 ---
 base_model: Qwen/Qwen3.5-2B
+base_model_relation: quantized
 license: apache-2.0
 library_name: transformers
 quantized_by: nchapman
 tags:
 - gptq
 - hadamard
-- quip
 - w4a16
 - compressed-tensors
 - vllm
+- warp34
 ---
 
 # Qwen3.5-2B-W4A16-HGPTQ
 
-4-bit Hadamard + GPTQ (`W4A16`, group size 64) quantization of [Qwen/Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B) across Text, Vision, and the Native MTP speculative drafter. It compresses the 4.24 GiB BF16 model down to **1.83 GiB** (2.31× smaller), fitting comfortably in 2–4 GB memory budgets with minimal quality loss.
+A 4-bit quantized version of [Qwen/Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B), Qwen's compact 2B multimodal model for everyday chat, extraction, lightweight coding, and vision. It uses Qwen's hybrid attention architecture and includes built-in Multi-Token Prediction (MTP) for speculative decoding.
 
-- **VRAM & footprint:** 1.83 GiB total across all 150 text linears, 98 vision linears, and 8 Native MTP linears (`mtp.fc` in `W8_g64`, tied `lm_head` in BF16).
-- **Quantization recipe:** 64×64 Walsh–Hadamard input rotation + MSE-initialized Cholesky GPTQ + 2-pass Hessian Coordinate Descent (`H-CD`) + end-to-end FP32-master `RMSNorm` KL tuning.
-- **Fidelity vs. BF16:** 0.0591 weighted KL (0.2038 mean KL, −1.35% PPL) on `probe-v4`, 0.0500 mean KL (0.0630 weighted KL, +0.72% PPL) on the `probe-guard` holdout, 92.78% / 81.64% isolated/E2E MTP top-1 agreement, and 97.35% / 93.71% isolated/E2E vision top-1 agreement (99.26% / 95.56% on `vision-guard-v2`).
+## Quickstart
 
-## Quality vs. BF16 Base Model (`Qwen/Qwen3.5-2B`)
+Built and optimized for [**warp34**](https://github.com/nchapman/warp34) (4–6 GB+ RTX 30/40-series GPUs):
 
-Teacher-forced evaluation comparing this checkpoint directly against the unquantized BF16 base model:
+```bash
+warp34 serve nchapman/Qwen3.5-2B-W4A16-HGPTQ
+```
 
-| Evaluation | BF16 Base (`Qwen/Qwen3.5-2B`) | **`Qwen3.5-2B-W4A16-HGPTQ`** | Notes |
-|---|---:|---:|---|
-| **Safetensors Size** | `4.24 GiB` (`4,548,221,488 B`) | **`1.83 GiB` (`1,968,201,664 B`)** | **`2.31×` compression** (`−2.41 GiB`) |
-| **Text Perplexity** (378 prompts, 840k tokens) ↓ | `3.8302` | **`3.7784` (`−1.35%`)** | Chat, math, science, coding, tool use, multilingual |
-| **Text Divergence vs. BF16** (weighted KL / token mean KL) ↓ | `0.0000` | **`0.0591` / `0.2038`** | Full-vocabulary FP32 KL divergence |
-| **General & Multilingual Holdout Perplexity** (76 prompts, 20k tokens) ↓ | `12.7820` | **`12.8746` (`+0.72%`)** | Token mean KL `0.0500` (weighted KL `0.0630`) |
-| **Native MTP (Speculative Drafter)** (11,583 positions) | `100.0%` Top-1 (`NLL 2.5969`) | **`92.78%` Isolated Top-1 (`NLL 2.6173`)** | Isolated MTP KL `0.0201` (end-to-end Top-1 `81.64%`, KL `0.3566`) |
-| **Vision (`vision-probe-v2`)** (96 images, 302 answer tokens) | `100.0%` Top-1 | **`97.35%` Isolated Top-1 · `93.71%` E2E Top-1** | Isolated ViT KL `0.0130`, E2E KL `0.0737` (`vision-guard-v2` Iso Top-1 `99.26%`, E2E Top-1 `95.56%`, KL `0.0562`) |
+Also runs in **vLLM** (`0.34+`):
 
-## What Is Quantized
+```bash
+vllm serve nchapman/Qwen3.5-2B-W4A16-HGPTQ --trust-remote-code
+```
 
-- **Quantized (`256` linear layers total in `model.safetensors-00001-of-00001.safetensors`)**:
-  - **Language (`150` linears in `W4A16-HGPTQ`)**: All 24 hybrid GatedDeltaNet + full-attention blocks (`q_proj`, `k_proj`, `v_proj`, `o_proj`, `in_proj_qkv`, `in_proj_z`, `out_proj`, `gate_proj`, `up_proj`, `down_proj`) with online block-Hadamard rotation (`head_dim=64`) + MSE-initialized Cholesky GPTQ (`group_size=64`) + 2-pass Gauss–Seidel Hessian Coordinate Descent (`H-CD`) + end-to-end FP32-master `RMSNorm` KL tuning.
-  - **Native MTP (`7` transformer linears in `W4A16-HGPTQ` + `mtp.fc` in `W8_g64`)**: `mtp.layers.0.self_attn.{q,k,v,o}_proj` and `mtp.layers.0.mlp.{gate,up,down}_proj` (`head_dim=64`, `group_size=64`), plus `mtp.fc` (`[2048, 4096]`) in unrotated 8-bit group-64 Cholesky GPTQ (`w8_head`).
-  - **Vision (`98` linears in `W4A16-HGPTQ`)**: All 24 ViT blocks (`visual.blocks.*.{attn.qkv,attn.proj,mlp.linear_fc1,mlp.linear_fc2}`) plus the 2 spatial merger projections (`visual.merger.{linear_fc1,linear_fc2}`). `visual.blocks.*.mlp.linear_fc2` (`K=4304`) uses per-channel Cholesky GPTQ + `head_dim=16` online Hadamard rotation (`v_vision_fc2`); all other Vision linears use `group_size=64` + `head_dim=64`.
-- **Kept in BF16**:
-  - Tied `embed_tokens` / `lm_head` (`tie_word_embeddings: true`), `linear_attn.in_proj_a`, `linear_attn.in_proj_b`, `visual.patch_embed.proj`, norms, and biases.
-- **Default sampling** (`generation_config.json`) & **release chat template** (`chat_template.jinja`): `temperature 1.0, top_p 0.95, top_k 20` (`eos_token_id: [248046, 248044]`, `pad_token_id: 248044`).
+## About this quant
 
-## Runtime & vLLM Notes
+- **Compact `1.83 GiB` footprint** (down from `4.24 GiB` in BF16, `2.3×` smaller), fitting easily on 4–6 GB GPUs with generous room for long context.
+- **Full-model 4-bit calibration:** Calibrates the text layers, vision encoder, and built-in MTP speculative draft head together so vision and fast speculative decoding both work out of the box.
+- **Near-BF16 fidelity:** Retains `97.4%` isolated vision top-1 agreement (`99.3%` on UI/OCR guard) and `92.8%` MTP draft agreement against the 16-bit base model.
+- **Optimized for [`warp34`](https://github.com/nchapman/warp34):** Uses standard `4-bit` packed weights with Hadamard rotation for full-speed CUDA serving with zero extra flags.
 
-- **Online Input Hadamard Transform (`transform_config`)**:
-  - Quantized linear layers have weights pre-rotated offline along the input dimension ($W' = W H_b / \sqrt{b}$, where $H_b$ is the deterministic $b \times b$ Sylvester Walsh–Hadamard matrix; $b=64$ for `v` and $b=16$ for `v_vision_fc2`) prior to Cholesky GPTQ quantization.
-  - At runtime, an online block Walsh–Hadamard transform ($x' = x H_b / \sqrt{b}$) is applied to input activations before the W4A16 GEMM (`HadaCore` / `CompressedTensorsLinearTransformMethod`).
-  - Because $H_b$ is deterministic (`randomize: false`), no transform weight matrices are stored in `.safetensors` (`0` storage overhead).
+**Need a different size?** Try [Qwen3.5-0.8B-W4A16-HGPTQ](https://huggingface.co/nchapman/Qwen3.5-0.8B-W4A16-HGPTQ) (`0.79 GiB`) or [Qwen3.5-4B-W4A16-HGPTQ](https://huggingface.co/nchapman/Qwen3.5-4B-W4A16-HGPTQ) (`3.19 GiB`).
+
+*Benchmarks, evaluation receipts, and quantization details: [Technical Report](TECHNICAL.md) · [`warp34-quant-lab`](https://github.com/nchapman/warp34-quant-lab).*

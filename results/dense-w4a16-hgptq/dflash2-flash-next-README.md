@@ -1,71 +1,45 @@
 ---
+base_model:
+- incoai/Qwen3.8-Flash-Next-DFlash2
+- Qwen/Qwen3.8-Flash-Next
+base_model_relation: quantized
 license: apache-2.0
 library_name: compressed-tensors
 pipeline_tag: text-generation
-base_model:
-  - incoai/Qwen3.8-Flash-Next-DFlash2
-  - Qwen/Qwen3.8-Flash-Next
 inference: false
+quantized_by: nchapman
 tags:
-  - dflash2
-  - speculative-decoding
-  - block-diffusion
-  - draft-model
-  - compressed-tensors
-  - w4a16
-  - gptq
-  - hadamard
+- dflash2
+- speculative-decoding
+- block-diffusion
+- draft-model
+- compressed-tensors
+- w4a16
+- gptq
+- hadamard
+- warp34
 ---
 
 # Qwen3.8-Flash-Next-DFlash2-W4A16-HGPTQ
 
-4-bit Hadamard + GPTQ (`W4A16`, group size 64) quantization of [`incoai/Qwen3.8-Flash-Next-DFlash2`](https://huggingface.co/incoai/Qwen3.8-Flash-Next-DFlash2), the 5-layer block-diffusion speculative drafter for [`Qwen/Qwen3.8-Flash-Next`](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) and [`nchapman/Qwen3.8-Flash-Next-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-W4A16-HGPTQ). It shrinks the drafter checkpoint from 1,150 MiB to **531 MiB** (2.17× smaller) and cuts the decoder weights read on every 8-token draft step by 3.76× (844 MiB → 224 MiB).
+A 4-bit quantized version of [incoai/Qwen3.8-Flash-Next-DFlash2](https://huggingface.co/incoai/Qwen3.8-Flash-Next-DFlash2), a lightweight block-diffusion speculative drafter for `Qwen3.8-Flash-Next` (180B MoE). It proposes multiple upcoming tokens in parallel to dramatically boost decode speed.
 
-- **VRAM & bandwidth savings:** 531 MiB total (224 MiB quantized decoder weights + 306 MiB BF16 `fc`/norms), saving 619 MiB of VRAM alongside the target model.
-- **Quantization recipe:** 64×64 Walsh–Hadamard input rotation + Cholesky GPTQ (`group_size=64`, `actorder="static"`) across all 35 decoder linear layers (`self_attn.{q,k,v,o}_proj` and `mlp.{gate,up,down}_proj`).
-- **Drafting fidelity vs. BF16:** Preserves 99.7% of the BF16 drafter's mean acceptance length (2.760 → 2.752 tokens/step) and 99.9% of its top-16 candidate recall (59.67% → 59.60%) across 14,336 drafted tokens.
+## Quickstart
 
-## Quality vs. BF16 Base Model (`incoai/Qwen3.8-Flash-Next-DFlash2`)
+Built and optimized for [**warp34**](https://github.com/nchapman/warp34) (used alongside `Qwen3.8-Flash-Next` via `--draft-model`):
 
-Evaluated across `2,048` 8-token draft blocks (`14,336` drafted tokens) against the BF16 drafter and target verifier:
-
-| Metric | BF16 Base (`incoai/Qwen3.8-Flash-Next-DFlash2`) | **`Qwen3.8-Flash-Next-DFlash2-W4A16-HGPTQ`** | Notes |
-|---|---:|---:|---|
-| **Safetensors Size** | `1.12 GiB` (`1,150.3 MiB`) | **`0.52 GiB` (`530.6 MiB`)** | **`2.17×` smaller** (`−619.6 MiB` VRAM saved) |
-| **Streamed Decoder Weights / Draft Step** | `843.8 MiB` | **`224.1 MiB`** | **`3.76×` less memory bandwidth** per 8-token draft step |
-| **Verifier Acceptance Length ($\tau$)** ↑ | `2.760` | **`2.752`** | **99.7%** of BF16 acceptance length preserved |
-| **Top-16 Candidate Recall (`Recall@16`)** ↑ | `59.67%` | **`59.60%`** | **99.9%** of BF16 candidate recall preserved |
-| **Position-1 / Position-2 / Position-3 Accuracy** ↑ | `61.7% / 45.6% / 36.5%` | **`61.8% / 45.6% / 36.5%`** | Matches BF16 across draft positions |
-| **Draft Token Agreement vs. BF16** (Unary / Selector Top-1) ↑ | `100.0% / 100.0%` | **`92.23% / 91.47%`** | Unary mean KL `0.0276` (median KL `0.0121`) |
-
-## What Is Quantized
-
-- **Quantized (`45` linear layers, `W4A16-HGPTQ`, `group_size=64`, `hadamard_block_size=64`, `actorder="static"`)**:
-  - `layers.{0..4}.self_attn.{q_proj,k_proj,v_proj,o_proj}` (`20` matrices)
-  - `layers.{0..4}.mlp.{gate_proj,up_proj,down_proj}` (`15` matrices)
-  - `layers.{0..4}.{attention_conv,mlp_conv}.kernel_projection` (`10` matrices)
-- **Kept in BF16**:
-  - `fc.weight` (`[2560, 12800]`, 5-tap target hidden state fusion projection over `target_layer_ids=[5, 15, 25, 35, 45]` averaged across the 4 hyper-connection streams)
-  - `candidate_selector.{predecessor_codebook,successor_codebook,hidden_projection.weight}`
-  - `layers.{0..4}.{attention_conv,mlp_conv}.base_kernel` (`[2, 2, 2560]`) and all RMSNorm weights (`hidden_norm`, `norm`, `input_layernorm`, `post_attention_layernorm`, `q_norm`, `k_norm`)
-
-## Attribution & Citation
-
-Derived from [`incoai/Qwen3.8-Flash-Next-DFlash2`](https://huggingface.co/incoai/Qwen3.8-Flash-Next-DFlash2) (Apache-2.0). Please cite the original DFlash 2 and DFlash works:
-
-```bibtex
-@misc{inco2026dflash2,
-  title  = {{DFlash 2: Keep Drafting Parallel}},
-  author = {{Inco AI}},
-  year   = {2026},
-  month  = {August},
-  url    = {https://inco.ai/blog/dflash2/}
-}
-
-@inproceedings{chen2026dflash,
-  title     = {{DFlash: Block Diffusion for Flash Speculative Decoding}},
-  author    = {Chen, Jian and Liang, Yesheng and Liu, Zhijian},
-  booktitle = {International Conference on Machine Learning (ICML)},
-  year      = {2026}
-}
+```bash
+warp34 serve nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO --tp 2 \
+  --draft-model nchapman/Qwen3.8-Flash-Next-DFlash2-W4A16-HGPTQ
 ```
+
+## About this quant
+
+- **Only `0.52 GiB` in VRAM** (down from `1.12 GiB` in BF16, `2.17×` smaller) — negligible overhead alongside the 180B MoE model.
+- **`3.76×` less memory bandwidth per draft step** (`224 MiB` vs. `844 MiB`), keeping drafting overhead tiny.
+- **Virtually identical acceptance rate to BF16:** Preserves `99.7%` of the 16-bit drafter's acceptance length (`2.752` vs. `2.760` tokens/step) and `99.9%` of its top-16 candidate recall.
+- **Optimized for [`warp34`](https://github.com/nchapman/warp34):** Plugs straight into `--draft-model` with either `W2.6` or `W4` `Qwen3.8-Flash-Next`.
+
+**Pairs with:** [Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO) or [Qwen3.8-Flash-Next-W4A16-HGPTQ](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-W4A16-HGPTQ).
+
+*Benchmarks, evaluation receipts, and quantization details: [Technical Report](TECHNICAL.md) · [`warp34-quant-lab`](https://github.com/nchapman/warp34-quant-lab).*
