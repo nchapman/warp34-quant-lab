@@ -38,7 +38,7 @@ vllm serve nchapman/Qwen3.8-27B-W4A16-HGPTQ --trust-remote-code
 - **Near-lossless quality:** Scores `85.99%` across IFEval (`81.9%`), MATH-500 (`82.8%`), and HumanEval+ (`93.3%`) vs. `86.90%` for the full 16-bit model.
 - **Optimized for [`warp34`](https://github.com/nchapman/warp34):** Uses standard `4-bit` / `8-bit` packed weights with Hadamard rotation so `warp34` runs full-speed CUDA kernels with zero extra flags.
 
-**Have a smaller GPU?** Try [Qwen3.8-27B-W2.6A16-HGPTQ-RCO](https://huggingface.co/nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO) (`12.20 GiB`, fits on 16 GB) or [Qwen3.8-27B-W2.2A16-HGPTQ-RCO](https://huggingface.co/nchapman/Qwen3.8-27B-W2.2A16-HGPTQ-RCO) (`11.06 GiB`, fits on 12 GB).
+**Have a smaller GPU?** Try [Qwen3.8-27B-W2.6A16-HGPTQ-RCO](https://huggingface.co/nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO) (`12.20 GiB`, fits on 16 GB).
 **Want faster generation?** Pair with the 4-bit DFlash2 drafter: [Qwen3.8-27B-DFlash2-W4A16-HGPTQ](https://huggingface.co/nchapman/Qwen3.8-27B-DFlash2-W4A16-HGPTQ).
 
 *Benchmarks, evaluation receipts, and quantization details: [Technical Report](TECHNICAL.md) · [`warp34-quant-lab`](https://github.com/nchapman/warp34-quant-lab).*

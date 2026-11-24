@@ -251,10 +251,6 @@ def test_model_cards_match_published_receipts() -> None:
             "results/rco-27b-w2w4/v2_receipts/probe_37pct_rco.json",
         ),
         (
-            "results/rco-27b-w2w4/TECHNICAL-W2.2A16-HGPTQ-RCO.md",
-            "results/rco-27b-w2w4/v2_receipts/probe_16pct_rco.json",
-        ),
-        (
             "results/rco-35b-w2w4/TECHNICAL-W2.6A16-HGPTQ-RCO.md",
             "results/rco-35b-w2w4/v2_receipts/probe_35b_w26_v2.json",
         ),
@@ -336,10 +332,6 @@ def test_published_user_model_cards_have_frontmatter_and_technical_reports() -> 
         (
             "results/rco-27b-w2w4/README-W2.6A16-HGPTQ-RCO.md",
             "results/rco-27b-w2w4/TECHNICAL-W2.6A16-HGPTQ-RCO.md",
-        ),
-        (
-            "results/rco-27b-w2w4/README-W2.2A16-HGPTQ-RCO.md",
-            "results/rco-27b-w2w4/TECHNICAL-W2.2A16-HGPTQ-RCO.md",
         ),
         (
             "results/rco-35b-w2w4/README-W2.6A16-HGPTQ-RCO.md",

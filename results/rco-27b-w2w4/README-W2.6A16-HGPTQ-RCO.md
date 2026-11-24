@@ -39,8 +39,6 @@ vllm serve nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO --trust-remote-code
 - **Strong real-world retention for its size:** Scores `82.87%` across IFEval (`78.2%`), MATH-500 (`81.4%`), and HumanEval+ (`89.0%`) vs. `86.90%` in full 16-bit.
 - **Optimized for [`warp34`](https://github.com/nchapman/warp34):** Uses strictly `2 / 4 / 8`-bit GPU-friendly formats (no slow 3-bit unpacking) so it runs fast out of the box.
 
-**Need a different size?**
-- **24 GB GPU:** [Qwen3.8-27B-W4A16-HGPTQ](https://huggingface.co/nchapman/Qwen3.8-27B-W4A16-HGPTQ) (`16.14 GiB`, highest quality)
-- **12 GB GPU (or extra context on 16 GB):** [Qwen3.8-27B-W2.2A16-HGPTQ-RCO](https://huggingface.co/nchapman/Qwen3.8-27B-W2.2A16-HGPTQ-RCO) (`11.06 GiB`)
+**Have a 24 GB GPU?** Use [Qwen3.8-27B-W4A16-HGPTQ](https://huggingface.co/nchapman/Qwen3.8-27B-W4A16-HGPTQ) (`16.14 GiB`, highest quality).
 
 *Benchmarks, evaluation receipts, and quantization details: [Technical Report](TECHNICAL.md) · [`warp34-quant-lab`](https://github.com/nchapman/warp34-quant-lab).*

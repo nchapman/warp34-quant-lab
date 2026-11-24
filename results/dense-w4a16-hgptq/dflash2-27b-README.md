@@ -40,6 +40,6 @@ warp34 serve nchapman/Qwen3.8-27B-W4A16-HGPTQ \
 - **Virtually identical acceptance rate to BF16:** Preserves `99.8%` of the 16-bit drafter's acceptance length (`2.535` vs. `2.540` tokens/step) and `100.0%` of its top-16 candidate recall.
 - **Optimized for [`warp34`](https://github.com/nchapman/warp34):** Plugs straight into `--draft-model` with any `Qwen3.8-27B` checkpoint.
 
-**Pairs with:** [Qwen3.8-27B-W4A16-HGPTQ](https://huggingface.co/nchapman/Qwen3.8-27B-W4A16-HGPTQ), [Qwen3.8-27B-W2.6A16-HGPTQ-RCO](https://huggingface.co/nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO), or [Qwen3.8-27B-W2.2A16-HGPTQ-RCO](https://huggingface.co/nchapman/Qwen3.8-27B-W2.2A16-HGPTQ-RCO).
+**Pairs with:** [Qwen3.8-27B-W4A16-HGPTQ](https://huggingface.co/nchapman/Qwen3.8-27B-W4A16-HGPTQ) or [Qwen3.8-27B-W2.6A16-HGPTQ-RCO](https://huggingface.co/nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO).
 
 *Benchmarks, evaluation receipts, and quantization details: [Technical Report](TECHNICAL.md) · [`warp34-quant-lab`](https://github.com/nchapman/warp34-quant-lab).*

@@ -9,7 +9,6 @@ Mixed 2-bit / 4-bit Hadamard + GPTQ (`W2.6A16`, group size 128, `H_512` Walsh–
 
 | Variant | Backbone W4 Budget | Pure Text Backbone | Full VLM+MTP Size | Text-Only Size | Target GPU Tier |
 |---|---:|---:|---:|---:|---|
-| [`Qwen3.8-27B-W2.2A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-27B-W2.2A16-HGPTQ-RCO) | `16.5%` `W4` (`103/400`) | `7.00 GiB` | `11.06 GiB` | `10.59 GiB` | Headless `12 GB` (text-only) / ultra-long-context `16 GB` |
 | **`Qwen3.8-27B-W2.6A16-HGPTQ-RCO` (this repo)** | **`36.75%` `W4` (`177/400`)** | **`8.15 GiB`** | **`12.20 GiB`** | **`11.74 GiB`** | **Recommended `16 GB` GPU (full VLM + MTP + CUDA graphs)** |
 | [`Qwen3.8-27B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-27B-W4A16-HGPTQ) | `100%` `W4` (`400/400`) | `12.08 GiB` | `16.14 GiB` | `15.67 GiB` | `24 GB` GPU (RTX 3090 / 4090 / 5090) |
 
@@ -27,12 +26,12 @@ Teacher-forced evaluation comparing this checkpoint directly against the unquant
 
 ### End-to-End EvalScope Benchmarks (`N=1,205`, greedy `temp=0.0`, `enable_thinking=False`)
 
-| Model / Checkpoint | Text Backbone (`bpw`) | IFEval (`541`) | MATH-500 (`500`) | HumanEval+ (`164`) | **3-Bench Mean** |
+| Model / Checkpoint | Text Backbone (`bpw`) | IFEval (`541`) | MATH-500 (`500`) | HumanEval+ (`164`) | 3-Bench Mean |
 |---|---:|---:|---:|---:|---:|
-| BF16 Base (`Qwen/Qwen3.8-27B`) | `45.36 GiB` (`16.00`) | `82.62%` | `84.80%` | `93.29%` | **`86.90%`** |
+| BF16 Base (`Qwen/Qwen3.8-27B`) | `45.36 GiB` (`16.00`) | `82.62%` | `84.80%` | `93.29%` | `86.90%` |
 | `W4A16-HGPTQ` (`nchapman`, `16.14 GiB` full) | `12.09 GiB` (`4.26`) | `81.89%` | `82.80%` | `93.29%` | `85.99%` |
 | Unsloth `UD-Q2_K_XL` (GGUF, mixed `Q2/Q3/Q4`) | `7.87 GiB` (`2.78`) | `81.52%` | `82.80%` | `92.07%` | `85.46%` |
-| **`W2.6A16-HGPTQ-RCO` V2 (strict `2/4/8`-bit, this repo)** | **`8.15 GiB` (`2.87`)** | **`78.19%`** | **`81.40%`** | **`89.02%`** | **`82.87%`** |
+| **`W2.6A16-HGPTQ-RCO` V2 (strict `2/4/8`-bit, this repo)** | `8.15 GiB` (`2.87`) | `78.19%` | `81.40%` | `89.02%` | `82.87%` |
 | `W2.6A16-HGPTQ-RCO` V1 (`g64`, `H_64`) | `8.12 GiB` (`2.86`) | `75.23%` | `82.40%` | `81.10%` | `79.58%` |
 
 ## What Is Quantized

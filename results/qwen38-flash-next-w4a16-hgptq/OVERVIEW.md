@@ -21,8 +21,8 @@ How we compressed `Qwen/Qwen3.8-Flash-Next` — a 180B-class, 512-expert multimo
 
 | Checkpoint | Total Size | GPU Trunk + MTP + Vision (excl. `mmap` PLE) | `probe-v4` PPL (`3.6085` base) | `probe-v4` `w_kl` ↓ | `probe-guard` `mean_kl` ↓ | MTP Iso / E2E Top-1 | Vision Iso / E2E Top-1 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| **`W4A16-HGPTQ`** ([report](TECHNICAL.md)) | **`92.84 GiB`** | `66.02 GiB` | `3.5683` (`-1.11%`) | **`0.0421`** | **`0.0673`** | `95.41%` / `88.39%` | `97.35%` / `93.71%` |
-| **`W2.6A16-HGPTQ-RCO` V2** ([report](../qwen38-flash-next-w26a16-hgptq-rco/TECHNICAL.md)) | **`71.67 GiB`** | **`44.84 GiB`** | `3.3704` (`-6.60%`) | **`0.1091`** | **`0.1961`** | `95.13%` / `82.90%` | `96.36%` / `92.72%` |
+| **`W4A16-HGPTQ`** ([report](TECHNICAL.md)) | `92.84 GiB` | `66.02 GiB` | `3.5683` (`-1.11%`) | **`0.0421`** | **`0.0673`** | **`95.41%`** / **`88.39%`** | **`97.35%`** / **`93.71%`** |
+| **`W2.6A16-HGPTQ-RCO` V2** ([report](../qwen38-flash-next-w26a16-hgptq-rco/TECHNICAL.md)) | **`71.67 GiB`** | **`44.84 GiB`** | `3.3704` (`-6.60%`) | `0.1091` | `0.1961` | `95.13%` / `82.90%` | `96.36%` / `92.72%` |
 | *`W2.6A16-HGPTQ-RCO` V1 (superseded)* | *`71.75 GiB`* | *`44.93 GiB`* | *`3.3931` (`-5.97%`)* | *`0.1396`* | *`0.3150`* | *`95.41%` / `81.55%`* | *`97.02%` / `90.73%`* |
 
 Switching `W2.6` from V1 (`g64-h64`, asymmetric `uint2b2`, `12/48` W4 layers) to V2 (`g128-h128`, symmetric mid-riser `code_offset=0.5`, `15/48` W4 layers) cut `probe-v4` weighted KL by **`21.9%`**, `probe-guard` mean KL by **`37.7%`** (`weighted_kl` by **`53.3%`**), and end-to-end Vision KL by **`38.0%`** while shrinking the checkpoint by another `80 MiB`.

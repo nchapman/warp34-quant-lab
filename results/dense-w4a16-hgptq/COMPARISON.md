@@ -36,30 +36,30 @@ Controlled evaluation comparing `W4A16-HGPTQ` and `W2.6A16-HGPTQ-RCO` (`nchapman
 | Arm | Hugging Face Source (`rev` @ `sha`) | Trunk (`bpw`) | Embed | `lm_head` | Vision | MTP | Text Total | File Total |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
 | `bf16` | `Qwen/Qwen3.8-27B` (`main` @ `37561816e66b`) | `45.36 GiB` (`16.00`) | `2.37` | `2.37` | `0.86` | `0.79` | `50.10 GiB` | `51.75 GiB` |
-| `w4_hgptq` | `nchapman/Qwen3.8-27B-W4A16-HGPTQ` (`main` @ `9ecfad02750a`) | **`12.09 GiB`** (`4.26`) | `2.37` | `1.22` | `0.23` | `0.23` | `15.67 GiB` | `16.14 GiB` |
+| **`w4_hgptq`** | `nchapman/Qwen3.8-27B-W4A16-HGPTQ` (`main` @ `9ecfad02750a`) | `12.09 GiB` (`4.26`) | `2.37` | `1.22` | `0.23` | `0.23` | `15.67 GiB` | `16.14 GiB` |
 | `exl3_4bpw` | `turboderp/Qwen3.8-27B-exl3` (`SCP_4.00bpw` @ `387b84455685`) | `11.39 GiB` (`4.02`) | `2.37` | `0.74` | `0.53` | `0.20` | `14.50 GiB` | `15.23 GiB` |
 | `gguf_q4_k_xl` | `unsloth/Qwen3.8-27B-GGUF` (`UD-Q4_K_XL` @ `4af51b3542f7`) | `14.47 GiB` (`5.11`) | `0.67` | `0.97` | `0.00` | `0.33` | `16.11 GiB` | `16.44 GiB` |
-| `w26_rco` (V1, `g64`, `H_64`) | `nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO` (`c663b36cee2f`) | `8.12 GiB` (`2.86`) | `2.37` | `1.22` | `0.23` | `0.23` | `11.71 GiB` | `12.18 GiB` |
-| **`w26_rco_v2` (V2 `D1`, published)** | `nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO` (`main` @ `3ad7ea3325c9`) | **`8.15 GiB`** (`2.87`) | `2.37` | `1.22` | `0.23` | `0.23` | `11.74 GiB` | `12.20 GiB` |
-| **`w22_rco_v2` (V2 `D1`, published)** | `nchapman/Qwen3.8-27B-W2.2A16-HGPTQ-RCO` (`main` @ `eddcd1e5dd5d`) | **`7.00 GiB`** (`2.47`) | `2.37` | `1.22` | `0.23` | `0.23` | `10.59 GiB` | `11.06 GiB` |
+| **`w26_rco_v2` (published V2 `D1`)** | `nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO` (`main` @ `3ad7ea3325c9`) | `8.15 GiB` (`2.87`) | `2.37` | `1.22` | `0.23` | `0.23` | `11.74 GiB` | `12.20 GiB` |
 | `exl3_3bpw` | `turboderp/Qwen3.8-27B-exl3` (`SCP_3.00bpw` @ `550c12cf3cad`) | `8.56 GiB` (`3.02`) | `2.37` | `0.59` | `0.53` | `0.20` | `11.52 GiB` | `12.25 GiB` |
 | `gguf_q2_k_xl` | `unsloth/Qwen3.8-27B-GGUF` (`UD-Q2_K_XL` @ `4af51b3542f7`) | `7.87 GiB` (`2.78`) | `0.39` | `0.67` | `0.00` | `0.33` | `8.93 GiB` | `9.26 GiB` |
+| *`w26_rco` (V1, superseded)* | *`nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO` (`c663b36cee2f`)* | *`8.12 GiB` (`2.86`)* | *`2.37`* | *`1.22`* | *`0.23`* | *`0.23`* | *`11.71 GiB`* | *`12.18 GiB`* |
 
 *(EXL3 GPU forward verification on `layers.0.linear_attn.in_proj_qkv` `[10240, 5120]`: `4.00bpw` cosine `0.9999998`, max abs diff `0.001465`; `3.00bpw` cosine `0.9999998`, max abs diff `0.000977`.)*
 
 ### Full Probe & EvalScope Scores (`27B`)
 
+*(Bold metric values mark the best quantized arm within each tier: 4-bit (`w4_hgptq`, `exl3_4bpw`, `gguf_q4_k_xl`) vs. sub-3-bit (`w26_rco_v2`, `exl3_3bpw`, `gguf_q2_k_xl`).)*
+
 | Arm | `probe-v4` `w_kl` (`mean_kl`) | `probe-guard` `mean_kl` | `IFEval` Prompt Strict / Loose | `IFEval` Inst Strict / Loose | `MATH-500` Acc (`correct/500`, `trunc`) | `HumanEval+` Pass@1 (`passed/164`) | 3-Task Avg |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | `bf16` | — | — | `82.62%` / `86.32%` | `87.77%` / `90.77%` | `84.80%` (`424`, `79`) | `93.29%` (`153`) | `86.90%` |
-| `w4_hgptq` | `0.1002` (`0.2583`) | `0.0530` | `81.89%` / `85.21%` | `87.41%` / `90.05%` | `82.80%` (`414`, `84`) | **`93.29%`** (`153`) | `85.99%` |
+| **`w4_hgptq`** | `0.1002` (`0.2583`) | `0.0530` | `81.89%` / `85.21%` | `87.41%` / `90.05%` | `82.80%` (`414`, `84`) | `93.29%` (`153`) | `85.99%` |
 | `exl3_4bpw` | `0.0929` (`0.2486`) | **`0.0343`** | **`82.26%`** / `85.40%` | `87.41%` / `89.93%` | **`83.80%`** (`419`, `78`) | `92.68%` (`152`) | **`86.25%`** |
 | `gguf_q4_k_xl` | **`0.0714`** (`0.1819`) | `0.0418` | `80.41%` / `83.73%` | `86.33%` / `89.09%` | `83.20%` (`416`, `87`) | **`93.90%`** (`154`) | `85.84%` |
-| `w26_rco` (V1, `g64`, `H_64`) | `0.2717` (`0.4265`) | `0.3272` | `75.23%` / `80.04%` | `82.73%` / `86.09%` | `82.40%` (`412`, `72`) | `81.10%` (`133`) | `79.58%` |
-| **`w26_rco_v2` (V2 `D1`, published)** | `0.2691` (`0.4321`) | `0.3168` | **`78.19%`** / `82.07%` | `84.41%` / `87.29%` | `81.40%` (`407`) | **`89.02%`** (`146`) | **`82.87%`** |
-| **`w22_rco_v2` (V2 `D1`, published)** | `0.3187` (`0.4900`) | `0.3809` | `72.09%` / `76.89%` | `80.58%` / `84.29%` | `80.20%` (`401`) | `81.71%` (`134`) | `78.00%` |
+| **`w26_rco_v2` (published V2 `D1`)** | `0.2691` (`0.4321`) | `0.3168` | `78.19%` / `81.33%` | `84.17%` / `86.69%` | `81.40%` (`407`, `84`) | `89.02%` (`146`) | `82.87%` |
 | `exl3_3bpw` | **`0.1924`** (`0.4871`) | **`0.0918`** | **`82.07%`** / `85.40%` | `87.41%` / `90.17%` | **`82.80%`** (`414`, `85`) | **`92.07%`** (`151`) | **`85.65%`** |
 | `gguf_q2_k_xl` | `0.3385` (`0.6760`) | `0.3732` | `81.52%` / `86.14%` | `87.17%` / `90.65%` | **`82.80%`** (`414`, `84`) | **`92.07%`** (`151`) | `85.46%` |
+| *`w26_rco` (V1, superseded)* | *`0.2717` (`0.4265`)* | *`0.3272`* | *`75.23%` / `80.04%`* | *`82.73%` / `86.09%`* | *`82.40%` (`412`, `72`)* | *`81.10%` (`133`)* | *`79.58%`* |
 
 ### Paired Bootstrap 95% CIs (`27B`, 20,000 draws, `B − A`)
 
@@ -70,8 +70,10 @@ Controlled evaluation comparing `W4A16-HGPTQ` and `W2.6A16-HGPTQ-RCO` (`nchapman
 | `bf16` vs `gguf_q4_k_xl` | `-2.22 pp [-4.62, +0.18]` | `-1.60 pp [-3.80, +0.60]` | `+0.61 pp [-1.22, +3.05]` |
 | `w4_hgptq` vs `exl3_4bpw` | `+0.37 pp [-2.22, +2.96]` | `+1.00 pp [-1.40, +3.40]` | `-0.61 pp [-3.05, +1.83]` |
 | `w4_hgptq` vs `gguf_q4_k_xl` | `-1.48 pp [-4.44, +1.29]` | `+0.40 pp [-2.00, +2.80]` | `+0.61 pp [-1.22, +3.05]` |
-| `w26_rco` vs `exl3_3bpw` | **`+6.84 pp [+3.51, +10.17]`** | `+0.40 pp [-2.40, +3.00]` | **`+10.98 pp [+6.10, +16.46]`** |
-| `w26_rco` vs `gguf_q2_k_xl` | **`+6.28 pp [+2.77, +9.98]`** | `+0.40 pp [-2.40, +3.20]` | **`+10.98 pp [+6.10, +16.46]`** |
+| *`w26_rco (V1)` vs `exl3_3bpw`* | *`+6.84 pp [+3.51, +10.17]`* | *`+0.40 pp [-2.40, +3.00]`* | *`+10.98 pp [+6.10, +16.46]`* |
+| *`w26_rco (V1)` vs `gguf_q2_k_xl`* | *`+6.28 pp [+2.77, +9.98]`* | *`+0.40 pp [-2.40, +3.20]`* | *`+10.98 pp [+6.10, +16.46]`* |
+
+*(Published **V2** `w26_rco_v2` point deltas `B − A` from `results/rco-27b-w2w4/v2_receipts/eval_27b_w26_v2.json` — per-prompt logs were not saved for V2 bootstrap resampling: `w26_rco_v2` vs `exl3_3bpw`: `+3.88 pp` IFEval / `+1.40 pp` MATH-500 / `+3.05 pp` HumanEval+ (`+2.78 pp` avg); `w26_rco_v2` vs `gguf_q2_k_xl`: `+3.33 pp` IFEval / `+1.40 pp` MATH-500 / `+3.05 pp` HumanEval+ (`+2.59 pp` avg).)*
 
 ---
 
@@ -82,28 +84,30 @@ Controlled evaluation comparing `W4A16-HGPTQ` and `W2.6A16-HGPTQ-RCO` (`nchapman
 | Arm | Hugging Face Source (`rev` @ `sha`) | Trunk (`bpw`) | Embed | `lm_head` | Vision | MTP | Text Total | File Total |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
 | `bf16` | `Qwen/Qwen3.5-9B` (`main` @ `c20223623576`) | `12.89 GiB` (`16.00`) | `1.90` | `1.90` | `0.85` | `0.45` | `16.68 GiB` | `17.98 GiB` |
-| `w4_hgptq` | `nchapman/Qwen3.5-9B-W4A16-HGPTQ` (`main` @ `68a367fdb019`) | **`3.43 GiB`** (`4.26`) | `1.90` | `0.98` | `0.23` | `0.14` | `6.30 GiB` | `6.67 GiB` |
+| **`w4_hgptq`** | `nchapman/Qwen3.5-9B-W4A16-HGPTQ` (`main` @ `68a367fdb019`) | `3.43 GiB` (`4.26`) | `1.90` | `0.98` | `0.23` | `0.14` | `6.30 GiB` | `6.67 GiB` |
 | `exl3_4bpw` | `TheMelonGod/Qwen3.5-9B-exl3` (`6hb-4.0bpw` @ `e98453aa143a`) | `3.24 GiB` (`4.02`) | `1.90` | `0.71` | `0.85` | `0.11` | `5.84 GiB` | `6.80 GiB` |
 | `gguf_q4_k_xl` | `unsloth/Qwen3.5-9B-GGUF` (`UD-Q4_K_XL` @ `3885219b6810`) | `4.24 GiB` (`5.26`) | `0.53` | `0.78` | `0.00` | `0.00` | `5.55 GiB` | `5.55 GiB` |
-| `w26_rco` (V1, `g64`, `H_64`) | `nchapman/Qwen3.5-9B-W2.6A16-HGPTQ-RCO` (`e8edfab266ba`) | `2.31 GiB` (`2.86`) | `1.90` | `0.98` | `0.23` | `0.14` | `5.18 GiB` | `5.54 GiB` |
-| **`w26_rco_v2` (V2 `D1`, published)** | `nchapman/Qwen3.5-9B-W2.6A16-HGPTQ-RCO` (`main` @ `cb911c6f9a6c`) | **`2.31 GiB`** (`2.86`) | `1.90` | `0.98` | `0.23` | `0.14` | `5.19 GiB` | `5.55 GiB` |
+| **`w26_rco_v2` (published V2 `D1`)** | `nchapman/Qwen3.5-9B-W2.6A16-HGPTQ-RCO` (`main` @ `cb911c6f9a6c`) | `2.31 GiB` (`2.86`) | `1.90` | `0.98` | `0.23` | `0.14` | `5.19 GiB` | `5.55 GiB` |
 | `exl3_3bpw` | `TheMelonGod/Qwen3.5-9B-exl3` (`6hb-3.0bpw` @ `22ef1303062e`) | `2.43 GiB` (`3.02`) | `1.90` | `0.71` | `0.85` | `0.11` | `5.04 GiB` | `6.00 GiB` |
 | `gguf_q2_k_xl` | `unsloth/Qwen3.5-9B-GGUF` (`UD-Q2_K_XL` @ `3885219b6810`) | `2.52 GiB` (`3.13`) | `0.53` | `0.78` | `0.00` | `0.00` | `3.83 GiB` | `3.83 GiB` |
+| *`w26_rco` (V1, superseded)* | *`nchapman/Qwen3.5-9B-W2.6A16-HGPTQ-RCO` (`e8edfab266ba`)* | *`2.31 GiB` (`2.86`)* | *`1.90`* | *`0.98`* | *`0.23`* | *`0.14`* | *`5.18 GiB`* | *`5.54 GiB`* |
 
 *(EXL3 GPU forward verification on `layers.0.linear_attn.in_proj_qkv` `[8192, 4096]`: `4.0bpw` cosine `0.9999999`, max abs diff `0.000977`; `3.0bpw` cosine `0.9999998`, max abs diff `0.000977`.)*
 
 ### Full Probe & EvalScope Scores (`9B`)
 
+*(Bold metric values mark the best quantized arm within each tier: 4-bit (`w4_hgptq`, `exl3_4bpw`, `gguf_q4_k_xl`) vs. sub-3-bit (`w26_rco_v2`, `exl3_3bpw`, `gguf_q2_k_xl`).)*
+
 | Arm | `probe-v4` `w_kl` (`mean_kl`) | `probe-guard` `mean_kl` | `IFEval` Prompt Strict / Loose | `IFEval` Inst Strict / Loose | `MATH-500` Acc (`correct/500`, `trunc`) | `HumanEval+` Pass@1 (`passed/164`) | 3-Task Avg |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | `bf16` | — | — | `84.47%` / `88.54%` | `89.33%` / `92.33%` | `84.60%` (`423`, `81`) | `84.15%` (`138`) | `84.41%` |
-| `w4_hgptq` | `0.0638` (`0.1897`) | `0.0399` | `83.92%` / `87.25%` | `88.61%` / `91.25%` | `82.60%` (`413`, `83`) | `83.54%` (`137`) | `83.35%` |
+| **`w4_hgptq`** | `0.0638` (`0.1897`) | `0.0399` | `83.92%` / `87.25%` | `88.61%` / `91.25%` | `82.60%` (`413`, `83`) | `83.54%` (`137`) | `83.35%` |
 | `exl3_4bpw` | `0.0610` (`0.1914`) | `0.0206` | `83.55%` / `87.62%` | `88.85%` / `91.61%` | **`83.60%`** (`418`, `81`) | `82.32%` (`135`) | `83.16%` |
 | `gguf_q4_k_xl` | **`0.0537`** (`0.1736`) | **`0.0191`** | **`84.66%`** / `87.99%` | `89.57%` / `91.97%` | **`83.60%`** (`418`, `76`) | **`85.37%`** (`140`) | **`84.54%`** |
-| `w26_rco` (V1, `g64`, `H_64`) | `0.2661` (`0.3431`) | `0.3642` | `60.07%` / `62.85%` | `69.54%` / `72.54%` | `68.00%` (`340`, `139`) | `60.98%` (`100`) | `63.02%` |
-| **`w26_rco_v2` (V2 `D1`, published)** | `0.2417` (`0.3809`) | `0.2933` | **`75.79%`** / `79.48%` | `82.85%` / `85.61%` | **`75.20%`** (`376`) | **`76.22%`** (`125`) | **`75.74%`** |
+| **`w26_rco_v2` (published V2 `D1`)** | `0.2417` (`0.3809`) | `0.2933` | `75.79%` / `79.48%` | `82.85%` / `85.61%` | `75.20%` (`376`, `106`) | `76.22%` (`125`) | `75.74%` |
 | `exl3_3bpw` | **`0.1395`** (`0.3708`) | **`0.0685`** | **`84.10%`** / `86.14%` | `89.21%` / `90.77%` | **`82.80%`** (`414`, `86`) | **`78.66%`** (`129`) | **`81.85%`** |
 | `gguf_q2_k_xl` | `0.2810` (`0.6090`) | `0.2011` | `77.45%` / `81.33%` | `83.93%` / `86.81%` | `73.00%` (`365`, `133`) | `68.90%` (`113`) | `73.12%` |
+| *`w26_rco` (V1, superseded)* | *`0.2661` (`0.3431`)* | *`0.3642`* | *`60.07%` / `62.85%`* | *`69.54%` / `72.54%`* | *`68.00%` (`340`, `139`)* | *`60.98%` (`100`)* | *`63.02%`* |
 
 ### Paired Bootstrap 95% CIs (`9B`, 20,000 draws, `B − A`)
 
@@ -114,9 +118,11 @@ Controlled evaluation comparing `W4A16-HGPTQ` and `W2.6A16-HGPTQ-RCO` (`nchapman
 | `bf16` vs `gguf_q4_k_xl` | `+0.18 pp [-2.22, +2.59]` | `-1.00 pp [-3.40, +1.40]` | `+1.22 pp [-3.05, +5.49]` |
 | `w4_hgptq` vs `exl3_4bpw` | `-0.37 pp [-2.77, +2.03]` | `+1.00 pp [-1.40, +3.40]` | `-1.22 pp [-6.10, +3.66]` |
 | `w4_hgptq` vs `gguf_q4_k_xl` | `+0.74 pp [-1.66, +3.14]` | `+1.00 pp [-1.20, +3.20]` | `+1.83 pp [-3.66, +7.32]` |
-| `w26_rco` vs `exl3_3bpw` | **`+24.03 pp [+19.78, +28.28]`** | **`+14.80 pp [+11.40, +18.40]`** | **`+17.68 pp [+9.76, +25.61]`** |
-| `w26_rco` vs `gguf_q2_k_xl` | **`+17.38 pp [+13.12, +21.63]`** | **`+5.00 pp [+1.40, +8.80]`** | `+7.93 pp [+0.00, +15.85]` |
+| *`w26_rco (V1)` vs `exl3_3bpw`* | *`+24.03 pp [+19.78, +28.28]`* | *`+14.80 pp [+11.40, +18.40]`* | *`+17.68 pp [+9.76, +25.61]`* |
+| *`w26_rco (V1)` vs `gguf_q2_k_xl`* | *`+17.38 pp [+13.12, +21.63]`* | *`+5.00 pp [+1.40, +8.80]`* | *`+7.93 pp [+0.00, +15.85]`* |
 | `exl3_3bpw` vs `gguf_q2_k_xl` | **`-6.65 pp [-9.80, -3.51]`** | **`-9.80 pp [-12.80, -7.00]`** | **`-9.76 pp [-17.07, -2.44]`** |
+
+*(Published **V2** `w26_rco_v2` point deltas `B − A` from `results/rco-9b-w2w4/v2_receipts/done.json` — per-prompt logs were not saved for V2 bootstrap resampling: `w26_rco_v2` vs `exl3_3bpw`: `+8.31 pp` IFEval / `+7.60 pp` MATH-500 / `+2.44 pp` HumanEval+ (`+6.11 pp` avg); `w26_rco_v2` vs `gguf_q2_k_xl`: `+1.66 pp` IFEval / **`-2.20 pp`** MATH-500 / **`-7.32 pp`** HumanEval+ (**`-2.62 pp`** avg, i.e., `w26_rco_v2` beats `gguf_q2_k_xl` by `+2.62 pp` overall while using `0.27 bpw` fewer bits).)*
 
 ### Sub-3-Bit Root-Cause Diagnostic (`9B`: `EXL3 2.5bpw` + Pure-BF16 `W2.6` Control)
 
@@ -124,12 +130,12 @@ Receipt: [`9b-g64-h64/sub3bit_diagnostic.json`](9b-g64-h64/sub3bit_diagnostic.js
 1. **`TheMelonGod/Qwen3.5-9B-exl3` (`6hb-2.5bpw` @ `088957c48707`)**: **`2.03 GiB` (`2.52 bpw`)** text backbone — `0.34 bpw` (`12%`) **smaller** than `W2.6A16-HGPTQ-RCO` (GPU dequant verified on `layers.0.linear_attn.in_proj_qkv`: cosine `0.9999998`, max abs diff `0.000977`).
 2. **`W2.6A16-HGPTQ-RCO` BF16-dequantized control**: `nchapman/Qwen3.5-9B-W2.6A16-HGPTQ-RCO` decompressed & Hadamard-unrotated ($W_{\text{unrot}} = W_{\text{rot}} H_{64}$, verified cosine `0.999995`) into pure `bfloat16` weights and served via `vLLM` with **zero W2 Marlin kernels**.
 
-| 9B Sub-3.2 bpw Arm | Trunk (`bpw`) | `probe-v4` `w_kl` (`m_kl`) | **`probe-guard` `mean_kl`** ↓ | `IFEval` Prompt Strict | `MATH-500` Acc | `HumanEval+` Pass@1 | 3-Task Avg |
+| 9B Sub-3.2 bpw Arm | Trunk (`bpw`) | `probe-v4` `w_kl` (`m_kl`) | `probe-guard` `mean_kl` ↓ | `IFEval` Prompt Strict | `MATH-500` Acc | `HumanEval+` Pass@1 | 3-Task Avg |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `exl3_3bpw` (`6hb-3.0bpw`) | `2.43 GiB` (`3.02`) | `0.1395` (`0.3708`) | `0.0685` | `84.10%` | `82.80%` | `78.66%` | `81.85%` |
-| **`exl3_2_5bpw` (`6hb-2.5bpw`)** | **`2.03 GiB` (`2.52`)** | `0.2516` (`0.5302`) | **`0.1725`** | **`81.89%`** | **`76.80%`** | **`71.34%`** | **`76.68%`** |
+| `exl3_3bpw` (`6hb-3.0bpw`) | `2.43 GiB` (`3.02`) | **`0.1395`** (`0.3708`) | **`0.0685`** | **`84.10%`** | **`82.80%`** | **`78.66%`** | **`81.85%`** |
+| `exl3_2_5bpw` (`6hb-2.5bpw`) | **`2.03 GiB`** (`2.52`) | `0.2516` (`0.5302`) | `0.1725` | `81.89%` | `76.80%` | `71.34%` | `76.68%` |
 | `gguf_q2_k_xl` (`UD-Q2_K_XL`) | `2.52 GiB` (`3.13`) | `0.2810` (`0.6090`) | `0.2011` | `77.45%` | `73.00%` | `68.90%` | `73.12%` |
-| `w26_rco` (native W2 Marlin) | `2.31 GiB` (`2.86`) | `0.2661` (`0.3431`) | `0.3642` | `60.07%` | `68.00%` | `60.98%` | `63.02%` |
+| `w26_rco` (V1 native W2 Marlin) | `2.31 GiB` (`2.86`) | `0.2661` (`0.3431`) | `0.3642` | `60.07%` | `68.00%` | `60.98%` | `63.02%` |
 | `w26_rco_bf16_deq` (pure BF16 control) | `2.31 GiB` (`2.86`) | `0.2660` (`0.3431`) | `0.3640` | `59.15%` | `69.40%` | `58.54%` | `62.36%` |
 
 **Takeaways:**
@@ -143,11 +149,11 @@ Receipt: [`9b-g64-h64/sub3bit_ablation.json`](9b-g64-h64/sub3bit_ablation.json).
 
 | 9B Sub-3.2 bpw Arm (`2/4/8`-bit or Reference) | Trunk (`bpw`) | `probe-guard` `mean_kl` ↓ | `IFEval` Prompt Strict | `MATH-500` Acc | `HumanEval+` Pass@1 | 3-Task Avg |
 |---|---:|---:|---:|---:|---:|---:|
-| `exl3_2_5bpw` (`6hb-2.5bpw`, trellis ref) | `2.03 GiB` (`2.52`) | `0.1725` | `81.89%` | `76.80%` | `71.34%` | `76.68%` |
-| **`D1` (`w2_g128_sym` + `w4_g128` + `H_512` + `36.75% W4` + clean QAT)** | **`2.31 GiB` (`2.86`)** | **`0.2935`** | **`79.67%`** | **`74.20%`** | **`70.12%`** | **`74.66%`** |
+| `exl3_2_5bpw` (`6hb-2.5bpw`, trellis ref) | **`2.03 GiB`** (`2.52`) | **`0.1725`** | **`81.89%`** | **`76.80%`** | **`71.34%`** | **`76.68%`** |
+| **`D1`** (`w2_g128_sym` + `w4_g128` + `H_512` + `36.75% W4` + clean QAT) | `2.31 GiB` (`2.86`) | `0.2935` | `79.67%` | `74.20%` | `70.12%` | `74.66%` |
 | `gguf_q2_k_xl` (`UD-Q2_K_XL`, mixed `Q2/Q3/Q4`) | `2.52 GiB` (`3.13`) | `0.2011` | `77.45%` | `73.00%` | `68.90%` | `73.12%` |
-| **`Q1` (`w2_g64_sym` + `w4_g64` + `H_64` + `30% W4` + clean `W2` scale-only)** | **`2.30 GiB` (`2.85`)** | `0.3118` | `73.94%` | `71.60%` | `67.68%` | `71.07%` |
-| `w26_rco` (shipping `w2_g64` + `H_64`, `all_low`-anchored QAT) | `2.31 GiB` (`2.86`) | `0.3642` | `60.07%` | `68.00%` | `60.98%` | `63.02%` |
+| **`Q1`** (`w2_g64_sym` + `w4_g64` + `H_64` + `30% W4` + clean `W2` scale-only) | `2.30 GiB` (`2.85`) | `0.3118` | `73.94%` | `71.60%` | `67.68%` | `71.07%` |
+| *`w26_rco` (V1 `w2_g64` + `H_64`, `all_low`-anchored QAT)* | *`2.31 GiB` (`2.86`)* | *`0.3642`* | *`60.07%`* | *`68.00%`* | *`60.98%`* | *`63.02%`* |
 
 **Key findings from the 25-arm ablation:**
 - **`D1` (`w2_g128_sym` + `w4_g128` + `H_512`, `36.75% W4`, `2.86 bpw`) gains `+11.64 pp` avg over shipping `W2.6A16-HGPTQ-RCO` (`63.02% → 74.66%`) and beats Unsloth `UD-Q2_K_XL` (`73.12%` @ `3.13 bpw`) on ALL 3 benchmarks** (`+2.22 pp` IFEval, `+1.20 pp` MATH-500, `+1.22 pp` HumanEval+) while using `0.27 bpw` fewer bits and staying 100% Marlin-native (`g128`, `H_512`, lossless `uint4b8` repack).

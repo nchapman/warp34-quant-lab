@@ -1,6 +1,6 @@
 # warp34-quant-lab
 
-Full-model 4-bit (`W4A16-HGPTQ`) and sub-3-bit (`W2.6`/`W2.2` `HGPTQ-RCO`) quantization, calibration, and teacher-forced fidelity probing for the Qwen 3.5 / 3.6 / 3.8 model family.
+Full-model 4-bit (`W4A16-HGPTQ`) and sub-3-bit (`W2.6` `HGPTQ-RCO`) quantization, calibration, and teacher-forced fidelity probing for the Qwen 3.5 / 3.6 / 3.8 model family.
 
 Most low-bit checkpoints only quantize the main text layers — dropping or blindly rounding the vision encoder and built-in speculative draft head. `warp34-quant-lab` calibrates and quantizes **text, Vision, Native Multi-Token Prediction (MTP), routed and shared MoE experts, and `Qwen3.8-Flash-Next`'s Layer-1 N-gram table** together in standard `2/4/8`-bit `compressed-tensors` format for [`warp34`](https://github.com/nchapman/warp34) and `vLLM`.
 
@@ -178,7 +178,6 @@ All pre-quantized checkpoints are published on Hugging Face under [`nchapman`](h
 | `Qwen/Qwen3.5-9B` | [`Qwen3.5-9B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.5-9B-W2.6A16-HGPTQ-RCO) ([report](results/rco-9b-w2w4/TECHNICAL-W2.6A16-HGPTQ-RCO.md)) | `36.75%` `W4` (`H_512`) | `5.55 GiB` (`2.31 GiB`) | `8 GB` | `0.2417` | `0.2933` | `75.74%` |
 | `ornith-ai/Ornith-1.5-9B` | [`Ornith-1.5-9B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Ornith-1.5-9B-W2.6A16-HGPTQ-RCO) ([report](results/ornith-15-9b-w26a16-hgptq-rco/TECHNICAL.md)) | `36.75%` `W4` (`H_512`) | `5.55 GiB` (`2.31 GiB`) | `8 GB` | `0.3258` | `0.4067` | — |
 | `Qwen/Qwen3.8-27B` | [`Qwen3.8-27B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO) ([report](results/rco-27b-w2w4/TECHNICAL-W2.6A16-HGPTQ-RCO.md)) | `36.75%` `W4` (`H_512`) | `12.20 GiB` (`8.15 GiB`) | `16 GB` | `0.2691` | `0.3168` | `82.87%` |
-| `Qwen/Qwen3.8-27B` | [`Qwen3.8-27B-W2.2A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-27B-W2.2A16-HGPTQ-RCO) ([report](results/rco-27b-w2w4/TECHNICAL-W2.2A16-HGPTQ-RCO.md)) | `16.5%` `W4` (`H_512`) | `11.06 GiB` (`7.00 GiB`) | `12 GB` / `16 GB` | `0.3187` | `0.3809` | `78.00%` |
 | `Qwen/Qwen3.6-35B-A3B` | [`Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO) ([report](results/rco-35b-w2w4/TECHNICAL-W2.6A16-HGPTQ-RCO.md)) | `12/40` exp (`H_512`) | `13.01 GiB` (`10.94 GiB`) | `16 GB` | `0.1784` | `0.1614` | `86.10%` |
 | `ornith-ai/Ornith-1.5-35B-A3B` | [`Ornith-1.5-35B-A3B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Ornith-1.5-35B-A3B-W2.6A16-HGPTQ-RCO) ([report](results/ornith-15-35b-a3b-w26a16-hgptq-rco/TECHNICAL.md)) | `12/40` exp (`H_512`) | `13.01 GiB` (`10.94 GiB`) | `16 GB` | `0.2283` | `0.3934` | — |
 | `Qwen/Qwen3.8-Flash-Next` | [`Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO) ([report](results/qwen38-flash-next-w26a16-hgptq-rco/TECHNICAL.md)) | `15/48` exp (`H_128`) | `71.67 GiB` (`44.84 GiB` trunk) | `48 GB` / `2× 24 GB` | `0.1091` | `0.1961` | — |
