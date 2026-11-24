@@ -1,136 +1,101 @@
 # warp34-quant-lab
 
-**Full-model 4-bit (`W4A16-HGPTQ`) quantizations of the Qwen 3.5 / 3.6 / 3.8 family—including the Vision encoder and the built-in Multi-Token Prediction (MTP) speculative draft head.**
+Full-model 4-bit (`W4A16-HGPTQ`) and sub-3-bit (`W2.6`/`W2.2` `HGPTQ-RCO`) quantization, calibration, and teacher-forced fidelity probing for the Qwen 3.5 / 3.6 / 3.8 model family.
 
-Most 4-bit checkpoints only quantize the main text layers. They either strip out the **MTP speculative draft head** and **Vision tower**, leave them bloated in 16-bit, or crush them with uncalibrated round-to-nearest (RTN) rounding.
+Most low-bit checkpoints only quantize the main text layers — dropping or blindly rounding the vision encoder and built-in speculative draft head. `warp34-quant-lab` calibrates and quantizes **text, Vision, Native Multi-Token Prediction (MTP), routed and shared MoE experts, and `Qwen3.8-Flash-Next`'s Layer-1 N-gram table** together in standard `2/4/8`-bit `compressed-tensors` format for [`warp34`](https://github.com/nchapman/warp34) and `vLLM`.
 
-This project takes a different approach: **every part of the model is calibrated and quantized to 4-bit (`~2.5×–3.6×` smaller overall)** so the entire multimodal + speculative model fits in a fraction of the memory while behaving almost identically to the original 16-bit weights.
+## Highlights
 
-### Why These Quants Are Cool
+- **Full-model 4-bit calibration (`W4A16-HGPTQ`):** Calibrates text layers, Vision (`96.4%–99.3%` top-1 agreement), and built-in Native MTP (`90.2%–96.6%` top-1 agreement) together — plus companion 4-bit `DFlash2` block-diffusion drafters (`99.7%–99.8%` of BF16 acceptance length) and salvaged MTP heads for fine-tunes that shipped without them.
+- **Hadamard rotation + Cholesky GPTQ + H-CD:** Block Walsh–Hadamard input rotation (`H_64` / `H_128` / `H_512`) spreads weight and activation outliers before GPTQ + Hessian Coordinate Descent and FP32-master `RMSNorm`/GDN KL tuning, matching `BF16` and `EXL3 4.0bpw` / `UD-Q4_K_XL` on `IFEval`, `MATH-500`, and `HumanEval+` at `16%–19%` smaller text-backbone size than `UD-Q4_K_XL`.
+- **Strict `2/4/8`-bit sub-3-bit RCO V2 (`HGPTQ-RCO`):** Symmetric mid-riser 2-bit (`w2_g128_sym`, `code_offset=0.5`) mixed with `w4_g128` via Riemannian Constrained Optimization fits `9B` on `8 GB`, `27B` & `35B-A3B` on `16 GB`, and `180B` `Qwen3.8-Flash-Next` on `48 GB` (`mmap` PLE) or `2× 24 GB` GPUs — beating `UD-Q2_K_XL` on `9B` (`75.74%` vs `73.12%` EvalScope mean) at lower `bpw`.
+- **MoE & 51.2B-parameter PLE compression:** Rotates and quantizes both routed and shared experts, compresses `Qwen3.8-Flash-Next`'s `102.4 GB` Layer-1 PLE table to `26.82 GiB` (`4`-bit `Custom-LUT4` `W_kv`-HGPTQ), and exports pre-profiled hot-expert rankings (`static_hot_cache_rankings.json`).
+- **Built-in verification harness:** Single-pass teacher-forced probing across frozen `probe-v4` (`378` prompts), `probe-guard` (`76` prompts), Native MTP, and disjoint `vision-probe-v2` / `vision-guard-v2` splits, plus an OpenAI-compatible `EvalScope` runner.
+- **Multi-domain coverage:** Supports dense VLMs (`0.8B`–`27B`), MoE models (`35B-A3B`, `Qwen3.8-Flash-Next`), `Qwen-Image-2.1` diffusion pipelines, `d3` / `GLiDE` decision classifiers, and Heretic abliteration LoRA extraction.
 
-- **Vision and MTP are first-class citizens:**
-  - **Calibrated 4-bit Vision:** Instead of leaving the vision encoder in 16-bit or blindly rounding it, we calibrate the vision tower on real charts, documents, UI screenshots, and OCR images—retaining **96%–99.7% top-1 token agreement** with the 16-bit vision encoder at ~`4×` smaller size.
-  - **Calibrated 4-bit Native MTP (built-in speculative decoding):** Every Qwen 3.5 / 3.6 / 3.8 checkpoint includes a built-in Multi-Token Prediction head that drafts upcoming tokens for **1.3×–1.7× faster decoding**. We calibrate and quantize the MTP layers against the model's own hidden states so speculative decoding works out of the box with **90%–96% draft agreement**.
-  - **Companion `DFlash2` block-diffusion drafters:** For `27B` and `Flash-Next`, we also ship 4-bit `DFlash2` drafters that propose **16 tokens in a single parallel pass** (`3.76×` less memory bandwidth per draft step) while keeping **99.7%–99.8%** of 16-bit acceptance length.
-- **Rotation before quantization (`Hadamard + GPTQ`):**
-  - Standard 4-bit quantizers struggle when a few weight or activation channels have huge outlier spikes. Before quantizing to 4-bit, we apply a fast mathematical rotation (a block Walsh–Hadamard transform) that spreads outliers evenly across 64-weight groups, then run Cholesky GPTQ to compensate for rounding error. That cuts overall divergence from 16-bit by **~30%** (and worst-case tail spikes by **up to 64%**) compared to standard 4-bit GPTQ.
-- **Salvaged & trajectory-calibrated speculative + diffusion quantization:**
-  - **Salvaged Native MTP:** `NousResearch/Arete-27B` shipped without `mtp.*` weights. Because its embedding matrix is bit-identical to `Qwen/Qwen3.8-27B`, we graft the donor MTP head, calibrate it on Arete Layer-63 hidden states, and restore speculative decoding with **96.47% isolated / 88.69% E2E Top-1 agreement**.
-  - **Full diffusion pipelines at 4-bit:** `Qwen/Qwen-Image-2.1` and `Qwen-Image-2.1-Turbo` (8.77B `Qwen3VL` text encoder + 7.12B single-stream DiT + VAE, `32.45 GiB → 9.82 GiB`, `3.31×`) are quantized with multimodal DeepStack + multi-aspect-ratio T2I/TI2I trajectory-calibrated DiT HGPTQ and Layer-35 Norm / Block-31 Velocity QK-Norm QAT (`image-gen-calib-v1`), retaining **`0.9991–0.9994` teacher-forced velocity cosine (`28.85–30.42 dB` SQNR)** and **`25.46–26.97 dB` end-to-end decoded-image PSNR (`36.5–36.6 dB` on TI2I editing)** vs. the BF16 pipeline.
-- **Giant MoE & N-Gram models that actually fit on real hardware:**
-  - On `Qwen3.6-35B-A3B` (`67.0 GiB → 18.78 GiB` in `W4A16-HGPTQ` for 24 GB cards, or **`13.01 GiB` in `W2.6A16-HGPTQ-RCO` V2 for a single 16 GB GPU**) and the 180B-class `Qwen3.8-Flash-Next` (`335.3 GiB → 92.84 GiB` in `W4A16-HGPTQ`, or **`44.84 GiB` trunk / `71.67 GiB` total in `W2.6A16-HGPTQ-RCO` V2 for a 48 GB or 80 GB GPU**), we rotate and quantize all routed *and* shared MoE experts, compress `Flash-Next`’s massive `102.4 GB` N-gram lookup table down to `26.8 GiB` using a custom 4-bit lookup table tailored to its downstream projections, and bundle **pre-computed hot-expert rankings** (`static_hot_cache_rankings.json`) so inference engines know which experts to pin in GPU VRAM from the very first token.
+## Prerequisites & Quick Start
 
----
-
-## Published Models & Measured Fidelity
-
-All 22 checkpoints (`13` `W4A16-HGPTQ`, `7` sub-3-bit `HGPTQ-RCO`, and `2` `DFlash2` drafters) are published on Hugging Face under [`nchapman`](https://huggingface.co/nchapman), with full evaluation receipts and model cards in [`results/`](results/):
-
-| Model | Artifact (`nchapman/*`) | Size | `probe-v4` PPL (BF16 → Quant) | `probe-v4` `weighted_kl` | `probe-guard` `weighted_kl` (`mean_kl`) | MTP Iso `mean_kl` (Top-1) | Vision Iso `mean_kl` (Top-1) | Vision Guard Iso Top-1 |
-|---|---|---:|---|---:|---|---:|---:|---:|
-| `Qwen/Qwen3.5-0.8B` | [`Qwen3.5-0.8B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.5-0.8B-W4A16-HGPTQ) ([card](results/dense-w4a16-hgptq/0.8b-g64-h64/README.md)) | `0.79 GiB` | `4.1695 → 4.3015` (`+3.166%`) | `0.073509` | `0.088739` (`0.070613`) | `0.028836` (`90.24%`) | `0.026580` (`94.04%`) | `97.04%` |
-| `Qwen/Qwen3.5-2B` | [`Qwen3.5-2B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.5-2B-W4A16-HGPTQ) ([card](results/dense-w4a16-hgptq/g64-h64/README.md)) | `1.83 GiB` | `3.8302 → 3.7784` (`-1.352%`) | `0.059069` | `0.062987` (`0.050014`) | `0.020116` (`92.78%`) | `0.012995` (`97.35%`) | `99.26%` |
-| `Qwen/Qwen3.5-4B` | [`Qwen3.5-4B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.5-4B-W4A16-HGPTQ) ([card](results/dense-w4a16-hgptq/4b-g64-h64/README.md)) | `3.19 GiB` | `4.0299 → 3.9537` (`-1.891%`) | `0.081090` | `0.074129` (`0.053346`) | `0.014983` (`94.26%`) | `0.004972` (`99.34%`) | `99.26%` |
-| `Qwen/Qwen3.5-9B` | [`Qwen3.5-9B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.5-9B-W4A16-HGPTQ) ([card](results/dense-w4a16-hgptq/9b-g64-h64/README.md)) | `6.67 GiB` | `3.5754 → 3.4999` (`-2.112%`) | `0.063824` | `0.058614` (`0.039538`) | `0.010453` (`94.86%`) | `0.007192` (`99.34%`) | `98.52%` |
-| `ornith-ai/Ornith-1.5-9B` | [`Ornith-1.5-9B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Ornith-1.5-9B-W4A16-HGPTQ) ([card](results/dense-w4a16-hgptq/9b-ornith-g64-h64/README.md)) | `6.67 GiB` | `6.6829 → 5.6579` (`-15.338%`) | `0.144025` | `0.133591` (`0.096463`) | `0.012652` (`94.68%`) | `0.020540` (`97.02%`) | `97.04%` |
-| `Qwen/Qwen3.8-27B` | [`Qwen3.8-27B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-27B-W4A16-HGPTQ) ([card](results/dense-w4a16-hgptq/27b-g64-h64/README.md)) | `16.14 GiB` | `8.5332 → 8.1841` (`-4.091%`) | `0.100223` | `0.073907` (`0.052982`) | `0.008979` (`96.64%`) | `0.005603` (`97.68%`) | `99.26%` |
-| `ukisai/Swift-1.5-Qwen3.8-27b` | [`Swift-1.5-Qwen3.8-27b-W4A16-HGPTQ`](https://huggingface.co/nchapman/Swift-1.5-Qwen3.8-27b-W4A16-HGPTQ) ([card](results/dense-w4a16-hgptq/27b-swift-g64-h64/README.md)) | `16.14 GiB` | `9.6265 → 9.0881` (`-5.593%`) | `0.107444` | `0.071995` (`0.055502`) | `0.009043` (`96.43%`) | `0.007063` (`98.01%`) | `99.26%` |
-| `NousResearch/Arete-27B` | [`Arete-27B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Arete-27B-W4A16-HGPTQ) ([card](results/arete-27b-w4a16-hgptq/README.md)) | `16.14 GiB` | `4.9736 → 4.8222` (`-3.044%`) | `0.088445` | `0.091283` (`0.067951`) | `0.008862` (`96.47%`, salvaged) | `0.004956` (`98.34%`) | `97.78%` |
-| `sabicap/sabi-noema` | [`sabi-noema-W4A16-HGPTQ`](https://huggingface.co/nchapman/sabi-noema-W4A16-HGPTQ) ([card](results/sabi-noema-w4a16-hgptq/README.md)) | `16.14 GiB` | `9.6074 → 9.4030` (`-2.127%`) | `0.110509` | `0.102326` (`0.067460`) | `0.008735` (`96.63%`, salvaged) | `0.007908` (`99.01%`) | `99.26%` |
-| `RadixArk/DaisyRose-27B` | [`DaisyRose-27B-W4A16-HGPTQ`](https://huggingface.co/nchapman/DaisyRose-27B-W4A16-HGPTQ) ([card](results/daisyrose-27b-w4a16-hgptq/README.md)) | `16.14 GiB` | `8.5603 → 8.2929` (`-3.123%`) | `0.111026` | `0.054826` (`0.075052`) | `0.009181` (`96.30%`) | `0.010187` (`99.01%`) | `98.52%` |
-| `Qwen/Qwen3.6-35B-A3B` | [`Qwen3.6-35B-A3B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.6-35B-A3B-W4A16-HGPTQ) ([card](results/qwen36-35b-a3b-w4a16-hgptq/README.md)) | `18.78 GiB` | `4.0208 → 3.7522` (`-6.682%`) | `0.084694` | `0.050908` (`0.046230`) | `0.010490` (`95.80%`) | `0.007135` (`99.34%`) | `98.52%` |
-| `ornith-ai/Ornith-1.5-35B-A3B` | [`Ornith-1.5-35B-A3B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Ornith-1.5-35B-A3B-W4A16-HGPTQ) ([card](results/ornith-15-35b-a3b-w4a16-hgptq/README.md)) | `18.78 GiB` | `10.8033 → 10.2627` (`-5.004%`) | `0.113922` | `0.228886` (`0.164721`) | `0.021504` (`91.44%`) | `0.030482` (`96.36%`) | `97.04%` |
-| `Apexintelligence-AI/Apex-35B-V1.0` | [`Apex-35B-V1.0-W4A16-HGPTQ`](https://huggingface.co/nchapman/Apex-35B-V1.0-W4A16-HGPTQ) ([card](results/apex-35b-v1-w4a16-hgptq/README.md)) | `18.78 GiB` | `5.1325 → 4.9373` (`-3.804%`) | `0.070100` | `0.062547` (`0.057495`) | `0.012086` (`95.06%`) | `0.016896` (`97.35%`) | `99.26%` |
-| `Qwen/Qwen3.8-Flash-Next` | [`Qwen3.8-Flash-Next-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-W4A16-HGPTQ) ([card](results/qwen38-flash-next-w4a16-hgptq/README.md)) | `92.84 GiB` | `3.6085 → 3.5683` (`-1.114%`) | `0.042091` | `0.088441` (`0.067320`) | `0.018417` (`95.41%`) | `0.017124` (`97.35%`) | `99.26%` |
-
-### Sub-3-Bit Mixed-Precision Checkpoints (`HGPTQ-RCO` V2: `w2_g128_sym` + `w4_g128` + `W8` Head)
-
-| Base Model | Artifact (`nchapman/*`) | `W4` Allocation | Full VLM+MTP (`Pure Text` / Trunk) | Target GPU | `probe-v4` `weighted_kl` (`mean_kl`) | `probe-guard` `mean_kl` | MTP Iso / E2E Top-1 | Vision Iso / E2E Top-1 |
-|---|---|---:|---:|---|---:|---:|---:|---:|
-| `Qwen/Qwen3.5-9B` | [`Qwen3.5-9B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.5-9B-W2.6A16-HGPTQ-RCO) ([card](results/rco-9b-w2w4/README-W2.6A16-HGPTQ-RCO.md), [sweep](results/rco-9b-w2w4/README.md)) | `36.75%` `W4` (`H_512`) | `5.55 GiB` (`2.31 GiB` text) | `8 GB` (full VLM + MTP) | `0.2417` (`0.3809`) | `0.2933` | `95.47%` / `78.36%` | `98.68%` / `92.38%` |
-| `Qwen/Qwen3.8-27B` | [`Qwen3.8-27B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO) ([card](results/rco-27b-w2w4/README-W2.6A16-HGPTQ-RCO.md), [sweep](results/rco-27b-w2w4/README.md)) | `36.75%` `W4` (`H_512`) | `12.20 GiB` (`8.15 GiB` text) | `16 GB` (full VLM + MTP) | `0.2691` (`0.4321`) | `0.3168` | `96.84%` / `72.91%` | `98.34%` / `88.74%` |
-| `Qwen/Qwen3.8-27B` | [`Qwen3.8-27B-W2.2A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-27B-W2.2A16-HGPTQ-RCO) ([card](results/rco-27b-w2w4/README-W2.2A16-HGPTQ-RCO.md), [sweep](results/rco-27b-w2w4/README.md)) | `16.5%` `W4` (`H_512`) | `11.06 GiB` (`7.00 GiB` text) | Headless `12 GB` / `16 GB` long-ctx | `0.3187` (`0.4900`) | `0.3809` | `96.84%` / `69.84%` | `96.69%` / `88.08%` |
-| `Qwen/Qwen3.6-35B-A3B` | [`Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO) ([card](results/rco-35b-w2w4/README-W2.6A16-HGPTQ-RCO.md), [sweep](results/rco-35b-w2w4/README.md)) | `30%` `W4` exp (`12/40`, `H_512`) | `13.01 GiB` (`10.94 GiB` text) | `16 GB` (full MoE VLM + MTP) | `0.1784` (`0.3445`) | `0.1614` | `95.50%` / `83.19%` | `98.01%` / `93.05%` |
-| `ornith-ai/Ornith-1.5-9B` | [`Ornith-1.5-9B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Ornith-1.5-9B-W2.6A16-HGPTQ-RCO) ([card](results/ornith-15-9b-w26a16-hgptq-rco/README.md)) | `36.75%` `W4` (`H_512`) | `5.55 GiB` (`2.31 GiB` text) | `8 GB` (full VLM + MTP) | `0.3258` (`0.5395`) | `0.4067` | `94.59%` / `69.90%` | `98.01%` / `91.39%` |
-| `ornith-ai/Ornith-1.5-35B-A3B` | [`Ornith-1.5-35B-A3B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Ornith-1.5-35B-A3B-W2.6A16-HGPTQ-RCO) ([card](results/ornith-15-35b-a3b-w26a16-hgptq-rco/README.md)) | `30%` `W4` exp (`12/40`, `H_512`) | `13.01 GiB` (`10.94 GiB` text) | `16 GB` (full MoE VLM + MTP) | `0.2283` (`0.3851`) | `0.3934` | `91.24%` / `66.02%` | `96.69%` / `94.37%` |
-| `Qwen/Qwen3.8-Flash-Next` | [`Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO) ([card](results/qwen38-flash-next-w26a16-hgptq-rco/README.md)) | `31.25%` `W4` exp (`15/48`, `H_128`) | `71.67 GiB` (`44.84 GiB` trunk) | `48 GB` (`mmap` PLE) / `80 GB` (all-in) | `0.1091` (`0.1691`) | `0.1961` | `95.13%` / `82.90%` | `96.36%` / `92.72%` |
-
-### Companion DFlash2 Block-Diffusion Speculative Drafters (`W4A16-HGPTQ`)
-
-| Base Drafter | Artifact (`nchapman/*`) | Size (BF16 → Quant) | Streamed Decoder Weights / Draft Step | Acceptance Length $\tau$ (BF16 → Quant) | `Recall@16` (BF16 → Quant) | Unary KL vs BF16 | Unary / Selector Top-1 Agreement |
-|---|---|---|---|---|---|---|---|
-| `incoai/Qwen3.8-27B-DFlash2` | [`Qwen3.8-27B-DFlash2-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-27B-DFlash2-W4A16-HGPTQ) ([card](results/dense-w4a16-hgptq/dflash2-27b-README.md)) | `3.58 GiB → 1.31 GiB` (`2.74×`) | `3,175 MiB → 843 MiB` (`3.76×`) | `2.540 → 2.535` (`99.8%`) | `53.88% → 53.88%` (`100.0%`) | `0.023087` | `92.63% / 92.03%` |
-| `incoai/Qwen3.8-Flash-Next-DFlash2` | [`Qwen3.8-Flash-Next-DFlash2-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-DFlash2-W4A16-HGPTQ) ([card](results/dense-w4a16-hgptq/dflash2-flash-next-README.md)) | `1.12 GiB → 0.52 GiB` (`2.17×`) | `843.8 MiB → 224.1 MiB` (`3.76×`) | `2.760 → 2.752` (`99.7%`) | `59.67% → 59.60%` (`99.9%`) | `0.027571` | `92.23% / 91.47%` |
-
-### Diffusion Image-Generation Checkpoints (`W4A16-HGPTQ`)
-
-Full-pipeline 4-bit quantizations of the `16B` Qwen-Image-2.1 text-to-image / image-to-image models (`8.77B` `Qwen3VL` text encoder + `7.12B` single-stream 3D-RoPE DiT + `0.63 GiB` BF16 VAE; `32.45 GiB → 9.82 GiB`, `3.31×`). Calibrated and evaluated on strictly disjoint, commit-pinned bilingual EN+ZH T2I/TI2I splits (`image-gen-{calib,probe,guard}-v1`: `OneIG-Bench` EN/ZH, `DPG-Bench`, `PartiPrompts`, `GEdit-Bench` EN/ZH TI2I, and `MagicBrush` OOD guard) across 5 canonical aspect ratios (`1024×1024`, `1344×768`, `768×1344`, `1152×896`, `896×1152`). The `Qwen3VL` vision tower is calibrated first so post-quantized Vision + DeepStack (`_deepstack_process`) + 3D M-RoPE features flow through all 36 decoder layers during sequential GPTQ and 160-step Layer-35 Norm QAT; the DiT is calibrated on 32 T2I+TI2I FlowMatch trajectories (`128` states) + 160-step Velocity QK-Norm QAT:
-
-| Base Model | Artifact (`nchapman/*`) | Size | `txt_in` Conditioning Cosine (`T2I` Prompt-Embeds) | Teacher-Forced Velocity Cosine (SQNR) | Guard Velocity Cosine (SQNR) | E2E Latent Cosine (SQNR) | Decoded Image PSNR (`All` / `TI2I` / `Guard`) |
-|---|---|---:|---:|---:|---:|---:|---:|
-| `Qwen/Qwen-Image-2.1-Turbo` | [`Qwen-Image-2.1-Turbo-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen-Image-2.1-Turbo-W4A16-HGPTQ) ([card](results/qwen-image-21-turbo-w4a16-hgptq/README.md)) | `9.82 GiB` | `0.9996` (`0.9922` / `18.21 dB`) | `0.9994` (`30.42 dB`) | `0.9992` (`29.29 dB`) | `0.9782` (`16.09 dB`) | `25.46 dB` (`36.53` / `27.25 dB`) |
-| `Qwen/Qwen-Image-2.1` | [`Qwen-Image-2.1-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen-Image-2.1-W4A16-HGPTQ) ([card](results/qwen-image-21-w4a16-hgptq/README.md)) | `9.82 GiB` | `0.9996` (`0.9922` / `18.20 dB`) | `0.9991` (`28.85 dB`) | `0.9988` (`27.62 dB`) | `0.9893` (`19.02 dB`) | `26.97 dB` (`36.61` / `27.03 dB`) |
-
----
-
-## Reproducing the Quants (Quick Start)
-
-Tooling is managed with [`mise`](.mise.toml) and [`uv`](pyproject.toml).
+**Requirements:**
+- Linux (x86_64) with Python `>= 3.12`
+- [`mise`](https://mise.jdx.dev/) and [`uv`](https://docs.astral.sh/uv/) (exact versions pinned in [`.mise.toml`](.mise.toml))
+- NVIDIA CUDA GPU for quantization, probing, and GPU kernel compilation (CPU-only hosts can run `list-models`, `verify-data`, and `mise run check`)
 
 ```bash
+git clone https://github.com/nchapman/warp34-quant-lab.git
+cd warp34-quant-lab
+
 # 1. Create and sync .venv with uv
 mise run setup
 
 # 2. (GPU hosts) Compile fast-path GatedDeltaNet kernels (causal-conv1d + flash-linear-attention)
 mise run setup-kernels
 
-# 3. Verify frozen calibration & probe JSONL checksums
+# 3. Verify frozen calibration/probe checksums and run linter + unit tests
 mise run verify-data
-
-# 4. Run linter, formatter check, and CPU unit test suite
 mise run check
 ```
 
-### Materialize Vision & Image-Generation Fixtures (`vision-*-v2`, `image-gen-*-v1`)
+Confirm the CLI is ready and inspect all registered model keys and default recipes:
 
 ```bash
-mise run build-vision-data
-mise run build-image-data
+mise run list-models
 ```
 
-Downloads pinned Hugging Face dataset Parquet/Arrow shards and deterministically materializes strictly disjoint calibration, probe, and OOD guard sets under `data/`:
-- `data/vision-calib-v2` — 120 images across 12 VQA/OCR/chart/reasoning domains (`calibration=true`)
-- `data/vision-probe-v2` — 96 held-out in-distribution evaluation images across 12 domains (`calibration=false`)
-- `data/vision-guard-v2` — 48 held-out out-of-distribution UI/ScreenSpot/Math guard images (`guard=true`)
-- `data/image-gen-calib-v1` — 96 EN+ZH T2I/TI2I rows across 16 domains (`72` T2I + `24` TI2I, `calibration=true`)
-- `data/image-gen-probe-v1` — 64 held-out EN+ZH T2I/TI2I rows across 16 domains (`48` T2I + `16` TI2I, `calibration=false`)
-- `data/image-gen-guard-v1` — 24 held-out OOD T2I/TI2I rows across 6 unseen domains (`16` T2I + `8` TI2I, `guard=true`)
+Expected output starts with:
 
-### Quantize & Probe
+```text
+KEY                ARCH           UPSTREAM HUB                               TARGET QUANT REPO
+------------------------------------------------------------------------------------------------------------------------
+0.8b               qwen3_5        Qwen/Qwen3.5-0.8B                          nchapman/Qwen3.5-0.8B-W4A16-HGPTQ
+  recipe: g64-h64 actorder=static calib=data/calib-cascade-v1.jsonl (999x4096) mtp=True vision=True
+...
+```
+
+## Usage
+
+### 1. Materialize Vision & Image-Generation Datasets
+
+Before quantizing or probing Vision / `Qwen-Image-2.1` models, materialize the strictly disjoint, commit-pinned image splits under `data/`:
 
 ```bash
-# List all registered model keys and default W4A16-HGPTQ recipes
-mise run list-models
+mise run build-vision-data   # data/vision-{calib,probe,guard}-v2 (120 / 96 / 48 images)
+mise run build-image-data    # data/image-gen-{calib,probe,guard}-v1 (96 / 64 / 24 rows)
+```
 
-# Quantize Qwen3.6-35B-A3B (streaming layer-by-layer MoE + MTP + Vision + hot expert cache rankings)
+### 2. Quantize a Model (`W4A16-HGPTQ`)
+
+`warp-quant quantize` automatically dispatches dense models (`0.8b`–`27b`), streaming MoE models (`35b`, `35b-ornith`, `35b-apex`, `flash-next`), diffusion pipelines (`qwen-image-2.1`, `qwen-image-2.1-turbo`), and decision classifiers (`d3*`, `glide-*`):
+
+```bash
+# Dense model (e.g. Qwen3.5-9B)
+mise run quantize -- \
+  --model 9b \
+  --output-dir ./out/Qwen3.5-9B-W4A16-HGPTQ
+
+# Streaming MoE model (Qwen3.6-35B-A3B: routed + shared experts + MTP + Vision + hot-expert rankings)
 mise run quantize -- \
   --model 35b \
   --output-dir ./out/Qwen3.6-35B-A3B-W4A16-HGPTQ
 
-# Quantize Qwen3.8-Flash-Next (streaming 48-layer 512-expert MoE + 4-bit Custom-LUT4 PLE + MTP + Vision)
+# 180B MoE + 51.2B Layer-1 PLE (Qwen3.8-Flash-Next)
 mise run quantize -- \
   --model flash-next \
   --output-dir ./out/Qwen3.8-Flash-Next-W4A16-HGPTQ
 
-# Quantize Qwen-Image-2.1-Turbo (8.77B Qwen3VL text encoder + 7.12B DiT, trajectory-calibrated HGPTQ + Norm QAT)
+# Diffusion pipeline (Qwen-Image-2.1-Turbo: Qwen3VL text encoder + DiT)
 mise run quantize -- \
   --model qwen-image-2.1-turbo \
   --output-dir ./out/Qwen-Image-2.1-Turbo-W4A16-HGPTQ \
   --quantize-vision \
   --quantize-lm-head-w8 \
   --vision-calib-dir data/vision-calib-v2
+```
 
-# Single-pass teacher-forced fidelity probe across probe-v4, probe-guard, MTP, and Vision v2
+### 3. Probe Fidelity Against BF16
+
+Evaluate text perplexity and KL divergence (`probe-v4` and `probe-guard`), Native MTP agreement, and Vision v2 agreement in a single pass:
+
+```bash
 mise run probe -- \
   --model 35b \
   --quant ./out/Qwen3.6-35B-A3B-W4A16-HGPTQ \
@@ -139,134 +104,131 @@ mise run probe -- \
   --eval-vision data/vision-probe-v2 \
   --eval-vision-guard data/vision-guard-v2 \
   --output-json ./out/probe_summary.json
-
-# Sub-3-bit & 4-bit H-RCO (H64 + Cholesky GPTQ + Gauss-Seidel H-CD + E2E Scale/Norm KL QAT + Riemannian RCO)
-uv run --no-sync warp-quant rco \
-  --model 9b \
-  --work-dir ./out/rco-9b-w2w4 \
-  --budgets 0.15 0.25 \
-  --calib-seq-len 1024 \
-  --steps 80 \
-  --gumbel-samples 2 \
-  --lr 0.25 \
-  --assemble all_low 15pct_rco 25pct_rco all_high
 ```
 
----
+### 4. Build Sub-3-Bit Mixed-Precision Checkpoints (`HGPTQ-RCO` V2)
 
-## Under the Hood: Technical Deep Dive & Lessons Learned
+Run the V2 (`w2_g128_sym` + `w4_g128` + `H_512`) Riemannian Constrained Optimization pipeline for dense models (`9b`, `9b-ornith`, `27b`):
 
-### 1. Why `g64-h64` (`W4A16-HGPTQ`)
-Right-multiplying each linear layer's weight matrix by a deterministic orthogonal block Walsh–Hadamard transform $W_{\text{rot}} = W H_{64}^\top / \sqrt{64}$ in FP64 prior to Cholesky GPTQ (`group_size=64`, `actorder="static"`, `dampening_frac=0.01`) spreads activation and weight channel outliers across 64-element blocks. At inference time, an online $H_{64}$ input transform ($x_{\text{rot}} = x H_{64} / \sqrt{64}$) cancels the weight rotation ($x_{\text{rot}} W_{\text{rot}}^\top = x W^\top$).
-- Across the Qwen3.5 / 3.6 / 3.8 family, `g64-h64` cuts text `weighted_kl` by **26%–32%** and tail `p99.9` KL by **up to 64%** relative to unrotated `g128` GPTQ, while fitting comfortably inside the 24 GB RTX 3090 VRAM envelope for `0.8B`–`35B-A3B`.
+```bash
+uv run --no-sync warp-quant rco \
+  --model 9b \
+  --work-dir ./out/rco-9b-v2 \
+  --options w2_g128_sym w4_g128 \
+  --hadamard-block-size 512 \
+  --budgets 0.3675 \
+  --assemble 37pct_rco
+```
 
-### 2. Unanchored Prefix + Anchored Suffix Target Regexes
-vLLM's `CompressedTensorsConfig` omits `apply_vllm_mapper` on `transform_config` targets, and passing `"Linear"` as a target string triggers a class-vs-module-name ambiguity in vLLM. Furthermore, Hugging Face and vLLM mount the same layers at different prefixes (`model.language_model.layers.*` vs `language_model.model.layers.*` vs `model.layers.*`, and `model.visual.*` vs `visual.*`).
-- **Rule:** Never use `"Linear"` as a `config_groups` or `transform_config` target. Always use `TEXT_TARGET_RE`, `MTP_TARGET_RE`, `VISION_GROUP_TARGET_RE`, and `VISION_FC2_TARGET_RE` (`src/warp_quant/hadamard_gptq.py`), which use unanchored prefixes (`re:.*`) and anchored suffixes (`$`) with a negative lookbehind `(?<!mtp\.)layers\.\d+\.` so Text, MTP, and Vision targets never collide across HF or vLLM.
-- **Strip `*.v_input.weight`:** `llmcompressor`'s `QuIPModifier` saves tied `*.v_input.weight` tensors for deterministic Hadamard matrices; both Transformers and vLLM `AutoWeightsLoader` reject those unexpected tensor keys unless stripped after `save_pretrained` (`_clean_and_augment_shards`).
+For MoE models (`35b`, `35b-ornith`, `flash-next`), pass `--save-rco-bank-dir` to `warp-quant quantize` to capture the per-layer W2 candidate bank, then run `run_moe_rco_search_and_qat` in `src/warp_quant/streaming_moe.py`.
 
-### 3. Rotate and Quantize **Both** Routed Experts (`mlp.experts.\d+`) and Shared Experts (`mlp.shared_expert`)
-In MoE architectures (`Qwen3.6-35B-A3B` and `Qwen3.8-Flash-Next`), leaving `mlp.shared_expert` unquantized or omitting $H_{64}$ rotation on routed/shared experts degrades both perplexity and tail KL:
-- Applying $H_{64}$ rotation + W4A16 Cholesky GPTQ (`group_size=64`, MSE scale search, 2-pass `H-CD`) to **both** routed experts (`mlp.experts.\d+.(gate_proj|up_proj|down_proj)`) and shared experts (`mlp.shared_expert.(gate_proj|up_proj|down_proj)`) in the main model and Native MTP reduced `Qwen3.8-Flash-Next` perplexity degradation by **6.7×** (`+3.342%` → `+0.496%`) and reduced `Qwen3.6-35B-A3B` `probe-guard` `weighted_kl` to **`0.0509`** while saving an additional `0.15–0.28 GiB`.
-- Untied `lm_head` (`tie_word_embeddings=False` on `9B`, `27B`, and `35B-A3B`) and `mtp.fc` are quantized with unrotated 8-bit Cholesky GPTQ + MSE scale search (`W8_g64`, `w8_head`), saving `0.47–1.20 GiB` with zero runtime Hadamard overhead on the vocabulary projection. Only the small routing gates (`mlp.gate`, `mlp.shared_expert_gate`), GDN per-head scalars (`linear_attn.in_proj_a`, `linear_attn.in_proj_b`, which have $N \in \{16, 32, 48\}$ and would violate Marlin's $N \bmod 64 = 0$ packing invariant), embeddings, norms, and tied `lm_head` (`0.8B`–`4B`) remain in BF16 (`BASE_IGNORE`).
+### 5. Run Downstream Benchmarks & Extract Abliteration LoRAs
 
-### 4. Vision Tower (`model.visual.*`): Per-Channel `linear_fc2` + `head_dim=16` Hadamard
-The Qwen3-VL vision tower has `intermediate_size = 4304` ($4304 = 16 \times 269$, not divisible by 32 or 64) on `visual.blocks.*.mlp.linear_fc2`:
-- `visual.blocks.*.attn.{qkv,proj}`, `visual.blocks.*.mlp.linear_fc1`, and `visual.merger.linear_fc{1,2}` have $K \bmod 64 = 0$ and use `group_size=64` Cholesky GPTQ + `head_dim=64` Hadamard (`group_0` / `v`).
-- `visual.blocks.*.mlp.linear_fc2` (`K=4304`) uses **per-channel** Cholesky GPTQ (`vision_fc2_channel`) paired with a separate `head_dim=16` online Hadamard transform group (`v_vision_fc2`).
-- Calibrating Vision Hessians on `data/vision-calib-v2` (120 images across 12 domains) with length-equalized token weighting (`token_exp=0.25`, scaling activations by $(1024 / N_{\text{tok}})^{0.25}$) prevents high-resolution document images from drowning out chart/UI images and improves VisionKL by **33%–36%** over weight-only RTN.
+```bash
+# EvalScope benchmarks against a running warp34 or vLLM OpenAI-compatible server
+mise run eval -- \
+  --model nchapman/Qwen3.5-9B-W4A16-HGPTQ \
+  --api-url http://127.0.0.1:8000/v1 \
+  --datasets ifeval math_500 humaneval_plus \
+  --no-thinking \
+  --temperature 0.0 \
+  --max-tokens 2048 \
+  --output-dir ./out/eval-9b
 
-### 5. Layer-1 PLE (`Qwen3.8-Flash-Next`): 4-Bit `Custom-LUT4` `W_kv`-HGPTQ + 4 KiB Page-Slotted Layout
-`Qwen3.8-Flash-Next` includes a `51.2B`-parameter (`102.4 GB` / `95.37 GiB` BF16) Per-Layer Embedding (PLE) table at Layer 1 (`128` N-gram shards across `8` files `model-ple-000..007.safetensors`, `320,000,456` head-rows × `160` dim/head across `16` N-gram heads, `ple_embed_dim = 2560`) feeding only `layers.1.ple.{key_proj,value_proj}`. Full ablation details and rejected alternatives (`FP8`, `INT8`, `NVFP4`, `INT4`, `IQ4_NL`, low-rank SVD, orthogonal rotation, and page layouts) are documented in [`results/qwen38-flash-next-w4a16-hgptq/PLE-QUANTIZATION-DESIGN.md`](results/qwen38-flash-next-w4a16-hgptq/PLE-QUANTIZATION-DESIGN.md):
-- **Why 4-bit (`26.82 GiB`) over 8-bit (`47.68 GiB` `FP8`):** At `47.7 GiB`, an 8-bit PLE table plus the `66.6 GiB` quantized backbone (`114.3 GiB` total) exceeds a `96 GB` GPU (`RTX PRO 6000` / `4× RTX 3090`) and overflows the Linux page cache when `HostExpertStore` pins `~45 GiB` of cold MoE experts on a 96–128 GB host. Compressing PLE to `26.82 GiB` brings the entire 180B checkpoint down to **`93.42 GiB`** and cuts random memory-controller sector / CPU cache-line reads per lookup by `40%` (`90 B/row` vs. `160 B/row`).
-- **Why uniform INT4 and `NVFP4` fail on PLE (`PLE_CUSTOM_LUT4`):** Normalized PLE groups are super-Gaussian ($\kappa \approx 4.6$); uniform `INT4` wastes outer bins on sparse tails, while `NVFP4` (`E2M1`) has coarse steps near the core. A fixed 16-entry non-uniform lookup table (`PLE_CUSTOM_LUT4`, 16 FP16 centroids fitting in a single warp register via `__shfl_sync`) matches the empirical PLE density.
-- **Rank-1 Alignment & Analytical `W_kv`-HGPTQ + 1-Pass Coordinate Descent:** Because finite calibration sets touch `<0.1%` of the 320M hash rows, activation-sampled GPTQ cannot calibrate the table. However, SVD of each head's downstream `key_proj` slice $W_{k,h} \in \mathbb{R}^{10240 \times 160}$ reveals a massive rank-1 dominant singular direction ($\sigma_1 = 5.66\text{–}6.88$ vs. $\sigma_2 \approx 2.2$, a `25×–47×` energy amplification) aligned at `0.9501` cosine similarity with $E_h$'s top singular vector. Solving Cholesky GPTQ (`group_size=32`, `actorder="static"`) + 1-pass Coordinate Descent scale refinement (`ple_cd_passes=1`) against the exact calibration-free downstream Hessian:
-  $$H_h = \frac{1}{2}\left(\frac{W_{k,h}^\top W_{k,h}}{\|W_{k,h}\|_F^2 / 160} + \frac{W_{v,h}^\top W_{v,h}}{\|W_{v,h}\|_F^2 / 160}\right) + \lambda \operatorname{diag}(\dots) \in \mathbb{R}^{160 \times 160}$$
-  steers quantization error into the low-gain subspace of $(W_{k,h}, W_{v,h})$ across all 320M rows (`0.98s`/shard on H200), cutting `key_proj(E)` error by **`29.6%` vs. `NVFP4 g16`** and **`22.3%` vs. `32 GB` `INT4 g16`**:
+# Extract an unrotated BF16 Heretic abliteration LoRA adapter (PEFT / vLLM / warp34)
+mise run heretic-lora -- \
+  --model 9b \
+  --output-dir ./out/qwen35-9b-heretic-lora
+```
 
-| 4-Bit PLE Scheme (`320M × 160`) | Effective `bpw` | Total PLE Size | `E` Rel-RMSE | `key_proj(E)` Rel-RMSE ↓ | `value_proj(E)` Rel-RMSE ↓ |
-|---|---:|---:|---:|---:|---:|
-| NVIDIA `NVFP4 E2M1 g16` (`FP4-Local`) | `4.50` | `28.80 GB` (`26.82 GiB`) | `9.534%` | `9.449%` | `9.528%` |
-| Uniform `INT4 sym g32` (RTN) | `4.50` | `28.80 GB` (`26.82 GiB`) | `9.424%` | `9.371%` | `9.423%` |
-| Primitive AI `INT4 sym g16` (`ples_int4`) | `5.00` | `32.00 GB` (`29.80 GiB`) | `8.672%` | `8.567%` | `8.676%` |
-| ISTA-DASLab `IQ4_NL g32` (Non-uniform LUT4, RTN) | `4.50` | `28.80 GB` (`26.82 GiB`) | `8.287%` | `7.434%` | `8.285%` |
-| **`Custom-LUT4 + W_kv-HGPTQ + CD (g=32)` (Ours)** | **`4.50`** | **`28.80 GB` (`26.82 GiB`)** | **`7.990%`** | **`6.655%`** | **`7.930%`** |
+## Published Models
 
-- **4 KiB Page-Slotted NVMe Layout (`pack_ple_page_slotted_4k`):** Each token performs `16` independent random head lookups; with unaligned contiguous rows, `39.8%` of tokens at 8-bit (`160 B/row`) and `29.9%` at 4-bit (`90 B/row`) suffer at least one head straddling two `4,096 B` OS pages. `pack_ple_page_slotted_4k` / `unpack_ple_page_slotted_4k` packs `45` complete PLE head-rows (`80 B` nibbles + `10 B` FP16 scales = `90 B/row`) into each `4,096 B` page (`4,050 / 4,096 B` = `98.88%` page density, **`0.000%` page-straddle rate**) for single-page-fault `mmap` / `io_uring` / `O_DIRECT` lookup.
+All pre-quantized checkpoints are published on Hugging Face under [`nchapman`](https://huggingface.co/nchapman), organized into curated collections:
 
-### 6. Static Hot Expert Cache Rankings (`runtime/static_hot_cache_rankings.json`)
-During streaming MoE quantization and probing (`src/warp_quant/streaming_moe.py`), exact top-$k$ router hits and routing probability mass are accumulated across all $L$ MoE layers and Native MTP (`9,804,460` expert assignments/layer for `flash-next`, `6,979,616` for `35b`) and exported to:
-- `runtime/static_hot_cache_rankings.json` (and root `static_hot_cache_rankings.json`) — maps target layer indices (`"0".."39"` or `"0".."47"`) to global expert IDs ordered hottest-first (`active_ranked_expert_ids`), enabling zero-warmup static hot-expert pinning in VRAM at server startup (`VLLM_WNA16_STATIC_HOT_CACHE_FILE` / `HostExpertStore`).
-- `runtime/expert_routing_profile.json` — full per-layer `ranked_expert_ids`, `active_ranked_expert_ids`, `hit_counts`, `weight_sums`, and `top_k_coverage` (`top_8..top_256`), including `"mtp.0"`.
+- **[Qwen Models (W4A16-HGPTQ)](https://huggingface.co/collections/nchapman/qwen-models-w4a16-hgptq-6b050569380158e23bc46085)** — core `0.8B`–`27B`, `35B-A3B`, and `Qwen3.8-Flash-Next` 4-bit checkpoints
+- **[Qwen Sub-3-Bit Models (W2.6A16-HGPTQ-RCO)](https://huggingface.co/collections/nchapman/qwen-sub-3-bit-models-w26a16-hgptq-rco-6b05056a986f3669623474ca)** — all 7 V2 strict `2/4/8`-bit RCO checkpoints
+- **[Qwen Fine-Tunes (W4A16-HGPTQ)](https://huggingface.co/collections/nchapman/qwen-fine-tunes-w4a16-hgptq-6b05056b6ec5bf4ecad11ac0)** — `Ornith-1.5`, `Apex-35B`, `Swift-1.5`, `Arete-27B`, `DaisyRose-27B`, `sabi-noema`
+- **[DFlash2 Drafters (W4A16-HGPTQ)](https://huggingface.co/collections/nchapman/dflash2-drafters-w4a16-hgptq-6b05056de9d3897cbc611241)** — 4-bit block-diffusion speculative drafters for `27B` and `Flash-Next`
+- **[Decision Models (W4A16-HGPTQ)](https://huggingface.co/collections/nchapman/decision-models-w4a16-hgptq-6b05056dfe6ebb9a6d419809)** — all 8 `vllm-sr/d3*` and 4 `fastino/GLiDE-*` classifiers ([receipts](results/decision-w4a16-hgptq/))
+- **[LoRA Adapters](https://huggingface.co/collections/nchapman/lora-adapters-6b05056ffc921b5ab472443b)** — hot-swappable BF16 adapters for `warp34` and `vLLM`
 
-### 7. Sub-3-Bit & 4-Bit Optimization (`H-CD` + `E2E Scale/Norm KL QAT` + Riemannian `HGPTQ-RCO` + `W8_g64` Head)
-`src/warp_quant/rco/` (`warp-quant rco`) and `src/warp_quant/streaming_moe.py` (`run_moe_rco_search_and_qat`) extend `g64-h64` down to `2.00–2.62` bits (`W2`/`W4` mixed precision + unrotated `W8_g64` untied head/MTP `fc`) and sharpen pure `4.00`-bit `W4A16-HGPTQ` checkpoints across both dense (`0.8B`–`27B`) and MoE (`35B-A3B`) architectures without changing the `compressed-tensors` format (`pack_quantized` + `W2A16`/`W4A16`/`W8A16` config groups + online $H_{64}$ transforms). Full receipts live in [`results/rco-2b-w2w4/`](results/rco-2b-w2w4/README.md), [`results/rco-9b-w2w4/`](results/rco-9b-w2w4/README.md), [`results/rco-27b-w2w4/`](results/rco-27b-w2w4/README.md), and [`results/rco-35b-w2w4/`](results/rco-35b-w2w4/README.md):
-- **Gauss–Seidel Hessian Coordinate Descent (`refine_hessian_cd` in `src/warp_quant/rco/options.py`):** Standard GPTQ freezes group scales (`amax / qmax`) before error propagation. Combining MSE grid scale search with alternating closed-form Hessian-weighted least-squares scale updates $s_g^\star = \sum (R H)_j Q_j / \sum (Q H)_j Q_j$ and exact columnwise Gauss–Seidel integer code updates $\Delta q_j = \operatorname{round}(\dots) - q_j$ reduces layerwise $H$-weighted reconstruction error across both dense linears and all `30,720` routed MoE expert projections.
-- **End-to-End Continuous Scale + FP32-Master `RMSNorm`/GDN-Gate KL Tuning (`run_e2e_scale_qat` in `src/warp_quant/rco/scale_qat.py` & `run_moe_rco_search_and_qat` in `src/warp_quant/streaming_moe.py`):** Parameterizes 2-bit `weight_scale` tensors in FP32 as $s = s_0 \cdot \exp(\delta)$ (`train_scales_max_bits=2`, keeping 4-bit `H-CD` scales frozen to avoid BF16 ULP jitter) while maintaining `RMSNorm` and GatedDeltaNet recurrence gates (`in_proj_a`, `in_proj_b`, `A_log`, `dt_bias`, and `mlp.shared_expert_gate` on MoE) as FP32 master weights with straight-through `bfloat16` rounding. Training against the BF16 teacher's logits cuts pure 2-bit (`2.00b`) `probe-v4` `weighted_kl` by **`46.5%`** on `2B` (`1.1794 → 0.6313`, PPL `+92.0% → +27.1%`) and consistently lowers 4-bit `probe-v4` and `probe-guard` KL across `0.8B`–`35B-A3B`.
-- **Riemannian Constrained Optimization (`HGPTQ-RCO`, `src/warp_quant/rco/search.py` & `src/warp_quant/streaming_moe.py`):** Solves discrete `[w2_g64, w4_g64]` allocations under exact byte budgets via Gumbel-Softmax + Straight-Through Estimator + exact Newton-bisection KL projection, followed by post-search FP32-master Norm/GDN KL QAT:
-  - **`Qwen3.5-2B` ([receipts](results/rco-2b-w2w4/README.md)):** `25%` (`2.50b`, `449 MiB` text) and `30%` (`2.60b`, `466 MiB` text, **`-33%` text bytes vs. `W4`**) reach **`+7.81%` / `+6.22%` `probe-v4` PPL** (`4.137` / `4.076` vs. `3.837` BF16) and outperform shipped `W4A16-HGPTQ` on long-context `terminal_agent` (`0.6981` vs. `0.7395`) and `swe` (`1.2384` vs. `1.9242`).
-  - **`Qwen3.5-9B` ([card](results/rco-9b-w2w4/README-W2.6A16-HGPTQ-RCO.md), [receipts](results/rco-9b-w2w4/README.md)):** At `30%` `HGPTQ-RCO` (`2.60b`, [`Qwen3.5-9B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.5-9B-W2.6A16-HGPTQ-RCO), **`5.54 GiB` full VLM+MTP** vs. `6.67 GiB` `W4A16`), the full multimodal + MTP model fits on an `8 GB` GPU with `0.1753` `probe-v4` `weighted_kl` (`0.1322` `mean_kl`), `94.86%` / `84.63%` isolated/E2E MTP Top-1, and `99.34%` / `93.38%` isolated/E2E Vision Top-1.
-  - **`Qwen3.8-27B` ([card](results/rco-27b-w2w4/README-W2.6A16-HGPTQ-RCO.md), [receipts](results/rco-27b-w2w4/README.md)):** At `30%` `HGPTQ-RCO` (`2.60b`, [`Qwen3.8-27B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO), `12.18 GiB` full VLM+MTP with `W8_g64` `lm_head` + `mtp.fc`), a `51.8 GiB` dense model fits comfortably on a `16 GB` GPU (`~3.8 GiB` KV/graph headroom) with `0.2717` `probe-v4` `weighted_kl`, `88.74%` E2E Vision Top-1, and `74.47%` E2E Native MTP Top-1, while `All-W4` (`16.14 GiB`) cuts `probe-v4` `weighted_kl` by `13.6%` (`0.1160 → 0.1002`) and `swe` KL by `20.7%` (`0.8918 → 0.7075`) while saving `1.20 GiB`.
-  - **`Qwen3.6-35B-A3B` (`MoE`, [card](results/rco-35b-w2w4/README-W2.6A16-HGPTQ-RCO.md), [receipts](results/rco-35b-w2w4/README.md)):** Keeps `100%` of always-active Attention/GDN (`130` linears), Shared Experts (`120` linears), Native MTP (`775` linears), and Vision (`110` linears) in `W4_g64` (plus `lm_head` and `mtp.fc` in `W8_g64`), while allocating `25%` (`10/40` layers = `layers 30..39`) of routed MoE experts to `W4_g64` and `75%` (`30/40` layers = `layers 0..29`) to `W2_g64` (`2.50 bpw` across routed experts, `2.62 bpw` overall across the language backbone). This compresses the `66.97 GiB` 256-expert MoE VLM+MTP model by **`5.09×` down to `13.15 GiB`** ([`Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO))—fitting on a single `16 GB` GPU with `0.2121` `probe-v4` `weighted_kl` (`0.0775` math KL, `0.0871` science KL), `0.1943` `probe-guard` `mean_kl`, `95.80%` / `83.47%` isolated/E2E MTP Top-1, and `99.34%` / `91.72%` isolated/E2E Vision Top-1.
-  - **`Qwen3.8-Flash-Next` (`180B MoE + 51.2B PLE`, [card](results/qwen38-flash-next-w26a16-hgptq-rco/README.md)):** Keeps `100%` of always-active Attention/GDN (`156` linears), Shared Experts (`144` linears), Native MTP (`1,543` linears), and Vision (`110` linears) in `W4_g64`, `lm_head` in `W8_g64`, and Layer-1 PLE in 4-bit `Custom-LUT4` (`26.82 GiB` with $W_{kv}$ MMSE compensation), while allocating the `12/48` (`25%`) highest leave-one-out KL sensitivity layers (`[3, 7, 15, 21, 22, 25, 29, 31, 34, 36, 46, 47]`) of routed MoE experts to `W4_g64` and the remaining `36/48` (`75%`) to `W2_g64` (`2.50 bpw` across `73,728` routed expert linears). Followed by 4-stream Hyper-Connection + Norm + GDN + PLE KL QAT, this brings the `48`-layer MoE trunk + Native MTP + Vision down to **`44.93 GiB`** (`71.75 GiB` total including PLE, [`Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO))—fitting on a single `48 GB` GPU with PLE `mmap`'d in system RAM or all-in on an `80 GB` GPU with **`0.1396` `probe-v4` `weighted_kl`** (`0.0679` math KL, `0.0780` chat KL, `0.0829` science KL), `95.41%` / `81.55%` isolated/E2E MTP Top-1, and `97.02%` / `90.73%` isolated/E2E Vision Top-1 (`99.26%` / `92.59%` on `vision-guard-v2`), while the refreshed `92.84 GiB` [`Qwen3.8-Flash-Next-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-W4A16-HGPTQ) reaches **`0.0421` `probe-v4` `weighted_kl`** (`-16.4%`) and **`0.0673` `probe-guard` `mean_kl`** (`-33.1%`).
+### Core & Fine-Tuned LLMs / VLMs (`W4A16-HGPTQ`)
 
-### 8. Consumer GPU `128K`-Context (`--kv-pages 8192`) Fit, Throughput & Safety Buffers in `warp34`
-Full capacity-planner breakdown, `tq4` vs `tq4_all` tradeoffs, LoRA VRAM reserves (`lora_arena` + `1,056 MiB` `scratch_arena`), and live `RTX 3060 12 GB` / `RTX 4060 Ti 16 GB` / `1× & 2× RTX 3090 24 GB` receipts live in [`results/warp34-consumer-gpu-128k/`](results/warp34-consumer-gpu-128k/README.md) ([`consumer_gpu_128k_matrix.json`](results/warp34-consumer-gpu-128k/consumer_gpu_128k_matrix.json)):
-- **Automatic `embed_tokens` PCIe Zero-Copy Offload (`use_host_embed`) & Elastic GDN Slots:** When post-boot VRAM slack is `< 2.0 GiB`, `warp34` places untied `embed_tokens` (`0.97–2.43 GiB` FP16) in pinned `MappedHostBuffer` (`< 1 µs` sparse row lookup, `0%` decode speed loss) while keeping `lm_head` (`W8_g64`) in GPU VRAM, lazily skipping `visual.*` (`~235 MiB`), and elastically clamping GDN `StateBundle` slots down to `3–8` slots above a hard `1,024 MiB` post-pool floor (`MIN_HEADROOM_BYTES`).
-- **Why `W2.6` (`25%–30% W4`) Hits the Exact Consumer Sweet Spot (`8 GB`, `12 GB`, `16 GB`, `1× / 2× 24 GB`):** Once you deduct **`~700 MiB` for attached LoRA adapters** (`~120–220 MiB` `lora_arena` + `+544 MiB` `512 → 1,056 MiB` `scratch_arena` expansion at `<= 8,192` KV pages; on tiered-MoE `Flash-Next`, `scratch_arena` is already `1,056 MiB` so LoRA adds only `~220 MiB`) and **`~600–900 MiB` for a Desktop OS + Browser** (Windows 11 DWM / Linux Wayland) on top of default **`128K` `tq4`** (8-bit tail-4 full-attention KV + WHT-256 4-bit `TQ4`), all four `W2.6A16-HGPTQ-RCO` checkpoints (`9B` on `8 GB`, `27B` on `16 GB`, `35B-A3B` on `16 GB`, `Flash-Next` on `1× / 2× 24 GB`) and `9B-W4A16-HGPTQ` (`12 GB`) fit out of the box with default `--kv-format tq4`:
+| Model | Artifact (`nchapman/*`) | Size | `probe-v4` PPL (BF16 → Quant) | `probe-v4` `weighted_kl` | `probe-guard` `weighted_kl` (`mean_kl`) | MTP Iso `mean_kl` (Top-1) | Vision Iso `mean_kl` (Top-1) | Vision Guard Iso Top-1 |
+|---|---|---:|---|---:|---|---:|---:|---:|
+| `Qwen/Qwen3.5-0.8B` | [`Qwen3.5-0.8B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.5-0.8B-W4A16-HGPTQ) ([report](results/dense-w4a16-hgptq/0.8b-g64-h64/TECHNICAL.md)) | `0.79 GiB` | `4.1695 → 4.3015` (`+3.166%`) | `0.073509` | `0.088739` (`0.070613`) | `0.028836` (`90.24%`) | `0.026580` (`94.04%`) | `97.04%` |
+| `Qwen/Qwen3.5-2B` | [`Qwen3.5-2B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.5-2B-W4A16-HGPTQ) ([report](results/dense-w4a16-hgptq/g64-h64/TECHNICAL.md)) | `1.83 GiB` | `3.8302 → 3.7784` (`-1.352%`) | `0.059069` | `0.062987` (`0.050014`) | `0.020116` (`92.78%`) | `0.012995` (`97.35%`) | `99.26%` |
+| `Qwen/Qwen3.5-4B` | [`Qwen3.5-4B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.5-4B-W4A16-HGPTQ) ([report](results/dense-w4a16-hgptq/4b-g64-h64/TECHNICAL.md)) | `3.19 GiB` | `4.0299 → 3.9537` (`-1.891%`) | `0.081090` | `0.074129` (`0.053346`) | `0.014983` (`94.26%`) | `0.004972` (`99.34%`) | `99.26%` |
+| `Qwen/Qwen3.5-9B` | [`Qwen3.5-9B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.5-9B-W4A16-HGPTQ) ([report](results/dense-w4a16-hgptq/9b-g64-h64/TECHNICAL.md)) | `6.67 GiB` | `3.5754 → 3.4999` (`-2.112%`) | `0.063824` | `0.058614` (`0.039538`) | `0.010453` (`94.86%`) | `0.007192` (`99.34%`) | `98.52%` |
+| `ornith-ai/Ornith-1.5-9B` | [`Ornith-1.5-9B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Ornith-1.5-9B-W4A16-HGPTQ) ([report](results/dense-w4a16-hgptq/9b-ornith-g64-h64/TECHNICAL.md)) | `6.67 GiB` | `6.6829 → 5.6579` (`-15.338%`) | `0.144025` | `0.133591` (`0.096463`) | `0.012652` (`94.68%`) | `0.020540` (`97.02%`) | `97.04%` |
+| `Qwen/Qwen3.8-27B` | [`Qwen3.8-27B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-27B-W4A16-HGPTQ) ([report](results/dense-w4a16-hgptq/27b-g64-h64/TECHNICAL.md)) | `16.14 GiB` | `8.5332 → 8.1841` (`-4.091%`) | `0.100223` | `0.073907` (`0.052982`) | `0.008979` (`96.64%`) | `0.005603` (`97.68%`) | `99.26%` |
+| `ukisai/Swift-1.5-Qwen3.8-27b` | [`Swift-1.5-Qwen3.8-27b-W4A16-HGPTQ`](https://huggingface.co/nchapman/Swift-1.5-Qwen3.8-27b-W4A16-HGPTQ) ([report](results/dense-w4a16-hgptq/27b-swift-g64-h64/TECHNICAL.md)) | `16.14 GiB` | `9.6265 → 9.0881` (`-5.593%`) | `0.107444` | `0.071995` (`0.055502`) | `0.009043` (`96.43%`) | `0.007063` (`98.01%`) | `99.26%` |
+| `NousResearch/Arete-27B` | [`Arete-27B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Arete-27B-W4A16-HGPTQ) ([report](results/arete-27b-w4a16-hgptq/TECHNICAL.md)) | `16.14 GiB` | `4.9736 → 4.8222` (`-3.044%`) | `0.088445` | `0.091283` (`0.067951`) | `0.008862` (`96.47%`, salvaged) | `0.004956` (`98.34%`) | `97.78%` |
+| `sabicap/sabi-noema` | [`sabi-noema-W4A16-HGPTQ`](https://huggingface.co/nchapman/sabi-noema-W4A16-HGPTQ) ([report](results/sabi-noema-w4a16-hgptq/TECHNICAL.md)) | `16.14 GiB` | `9.6074 → 9.4030` (`-2.127%`) | `0.110509` | `0.102326` (`0.067460`) | `0.008735` (`96.63%`, salvaged) | `0.007908` (`99.01%`) | `99.26%` |
+| `RadixArk/DaisyRose-27B` | [`DaisyRose-27B-W4A16-HGPTQ`](https://huggingface.co/nchapman/DaisyRose-27B-W4A16-HGPTQ) ([report](results/daisyrose-27b-w4a16-hgptq/TECHNICAL.md)) | `16.14 GiB` | `8.5603 → 8.2929` (`-3.123%`) | `0.111026` | `0.054826` (`0.075052`) | `0.009181` (`96.30%`) | `0.010187` (`99.01%`) | `98.52%` |
+| `Qwen/Qwen3.6-35B-A3B` | [`Qwen3.6-35B-A3B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.6-35B-A3B-W4A16-HGPTQ) ([report](results/qwen36-35b-a3b-w4a16-hgptq/TECHNICAL.md)) | `18.78 GiB` | `4.0208 → 3.7522` (`-6.682%`) | `0.084694` | `0.050908` (`0.046230`) | `0.010490` (`95.80%`) | `0.007135` (`99.34%`) | `98.52%` |
+| `ornith-ai/Ornith-1.5-35B-A3B` | [`Ornith-1.5-35B-A3B-W4A16-HGPTQ`](https://huggingface.co/nchapman/Ornith-1.5-35B-A3B-W4A16-HGPTQ) ([report](results/ornith-15-35b-a3b-w4a16-hgptq/TECHNICAL.md)) | `18.78 GiB` | `10.8033 → 10.2627` (`-5.004%`) | `0.113922` | `0.228886` (`0.164721`) | `0.021504` (`91.44%`) | `0.030482` (`96.36%`) | `97.04%` |
+| `Apexintelligence-AI/Apex-35B-V1.0` | [`Apex-35B-V1.0-W4A16-HGPTQ`](https://huggingface.co/nchapman/Apex-35B-V1.0-W4A16-HGPTQ) ([report](results/apex-35b-v1-w4a16-hgptq/TECHNICAL.md)) | `18.78 GiB` | `5.1325 → 4.9373` (`-3.804%`) | `0.070100` | `0.062547` (`0.057495`) | `0.012086` (`95.06%`) | `0.016896` (`97.35%`) | `99.26%` |
+| `Qwen/Qwen3.8-Flash-Next` | [`Qwen3.8-Flash-Next-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-W4A16-HGPTQ) ([report](results/qwen38-flash-next-w4a16-hgptq/TECHNICAL.md)) | `92.84 GiB` | `3.6085 → 3.5683` (`-1.114%`) | `0.042091` | `0.088441` (`0.067320`) | `0.018417` (`95.41%`) | `0.017124` (`97.35%`) | `99.26%` |
 
-| Consumer GPU Tier | Checkpoint (`nchapman/*`) | `128K` `tq4` VRAM (`tq4_all`) | Prefill (`tok/s`) | Decode Std / **`MTP k=3`** (`tok/s`) | Buffer After `128K` `tq4` + `warp34` `1 GiB` Floor | Buffer After LoRA (`-700 MiB`) for Desktop OS |
-|---|---|---:|---:|---:|---:|---:|
-| **`8 GB` (`RTX 4060`)** | `Qwen3.5-9B-W2.6A16-HGPTQ-RCO` (`2.60 bpw`) | `6,153 MiB` (`5,593 MiB`) | `1,726.7` | `69.2` / **`151.5`** | **`+1,635 MiB`** | **`+935 MiB`** (`+1,495 MiB` `tq4_all`) |
-| **`12 GB` (`RTX 3060`)** | `Qwen3.5-9B-W4A16-HGPTQ` (`4.00 bpw`) | `8,835 MiB` (`8,275 MiB`) *(w/ `MTP`)* | `1,646.7` | `60.9` / **`140.5`** | **`+3,111 MiB`** | **`+2,411 MiB`** (`+2,971 MiB` `tq4_all`) |
-| **`12 GB` (`RTX 3060`)** | `Qwen3.8-27B-W2.2A16-HGPTQ-RCO` (`2.20 bpw`) | `10,883 MiB` *(`64K` `tq4_all`)* | `505.8` | `21.95` | **`+1,063 MiB`** *(at `32K–48K`)* | — |
-| **`16 GB` (`RTX 4060 Ti`)** | `Qwen3.8-27B-W2.6A16-HGPTQ-RCO` (`2.60 bpw`) | `14,976 MiB` (`14,832 MiB`) | `839.9` | `24.9` / **`48.5`** | **`+1,276 MiB`** | **`+576 MiB`** (`+1,104 MiB` `tq4_all`) |
-| **`16 GB` (`RTX 4060 Ti`)** | `Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO` (`2.62 bpw`) | `14,934 MiB` (`14,918 MiB`) | `4,165.5` | `123.2` / **`190.8`** | **`+921 MiB`** | **`+221 MiB`** (`+485 MiB` `tq4_all`) |
-| **`1× 24 GB` (`RTX 3090`, `TP=1`)** | `Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO` (`k_hot=96/512`) | `19,489 MiB` *(w/ `MTP` + `20` GDN slots)* | `278.8` | **`26.1`** / `24.0` | **`+3,614 MiB`** *(`4,638 MiB` free)* | **`+3,394 MiB`** *(room for `k_hot=136–152`)* |
-| **`2× 24 GB` (`2× 3090`, `TP=2`)** | `Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO` (`k_hot=128/256`) | `18,112 MiB`/GPU *(w/ `MTP` + `18` GDN slots)* | `403.5` | `50.3` / **`73.2`** | **`+4,976 MiB`/GPU** *(`6,000 MiB`/GPU free)* | **`+4,756 MiB`/GPU** *(`50.0%` experts in VRAM)* |
-| **`2× 24 GB` (`2× 3090`, `TP=2`)** | `Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO` (`k_hot=160/256`) | `21,256 MiB`/GPU *(w/ `MTP` + `18` GDN slots)* | **`502.3`** | `59.7` / **`95.0`** | **`+1,832 MiB`/GPU** *(`2,856 MiB`/GPU free)* | **`+1,612 MiB`/GPU** *(default `warp34` `k_hot=160`)* |
-| **`2× 24 GB` (`2× 3090`, `TP=2`)** | `Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO` (`k_hot=192..208/256`) | `23,728 MiB`/GPU *(w/ `MTP` + `18` GDN slots)* | **`707.6–787.5`** | `71.4–74.0` / **`124.2–131.6`** | Headless ceiling (`384 MiB`/GPU post-graph free) | Headless (`75%–81.25%` experts in VRAM) |
+### Sub-3-Bit Mixed-Precision Checkpoints (`HGPTQ-RCO` V2: `w2_g128_sym` + `w4_g128` + `W8` Head)
 
-### 9. 7-Arm Cross-Format Comparison: `W4A16-HGPTQ` / `W2.6A16-HGPTQ-RCO` vs. `ExLlamaV3` (`EXL3`) & Unsloth Dynamic `GGUF` (`27B` & `9B`)
-Full provenance SHAs, exact component byte breakdowns, `20,000`-draw paired bootstrap CI tables, and reproduction steps live in [`results/dense-w4a16-hgptq/COMPARISON.md`](results/dense-w4a16-hgptq/COMPARISON.md) (implemented in [`scripts/run_comparison_suite.py`](scripts/run_comparison_suite.py) and [`src/warp_quant/comparison_runner.py`](src/warp_quant/comparison_runner.py)). All 14 arms (`BF16` baseline + 6 quants per size) are evaluated on the **full** `EvalScope` datasets (`541` `IFEval`, `500` `MATH-500`, `164` `HumanEval+` — `1,205` prompts per arm, `max_tokens=2048`, greedy `temperature=0.0`, `enable_thinking=False`, `seed=42`) served identically via `vLLM` (`bfloat16`, `--gdn-prefill-backend triton`), paired with cached-teacher `BF16` `probe-v4` (`378` rows) & `probe-guard` (`76` rows) KL and `20,000`-draw paired bootstrap CIs.
+| Base Model | Artifact (`nchapman/*`) | `W4` Allocation | Full (`Pure Text` / Trunk) | Target GPU | `probe-v4` `w_kl` | `probe-guard` `mean_kl` | EvalScope 3-Bench Mean |
+|---|---|---:|---:|---|---:|---:|---:|
+| `Qwen/Qwen3.5-9B` | [`Qwen3.5-9B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.5-9B-W2.6A16-HGPTQ-RCO) ([report](results/rco-9b-w2w4/TECHNICAL-W2.6A16-HGPTQ-RCO.md)) | `36.75%` `W4` (`H_512`) | `5.55 GiB` (`2.31 GiB`) | `8 GB` | `0.2417` | `0.2933` | `75.74%` |
+| `ornith-ai/Ornith-1.5-9B` | [`Ornith-1.5-9B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Ornith-1.5-9B-W2.6A16-HGPTQ-RCO) ([report](results/ornith-15-9b-w26a16-hgptq-rco/TECHNICAL.md)) | `36.75%` `W4` (`H_512`) | `5.55 GiB` (`2.31 GiB`) | `8 GB` | `0.3258` | `0.4067` | — |
+| `Qwen/Qwen3.8-27B` | [`Qwen3.8-27B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO) ([report](results/rco-27b-w2w4/TECHNICAL-W2.6A16-HGPTQ-RCO.md)) | `36.75%` `W4` (`H_512`) | `12.20 GiB` (`8.15 GiB`) | `16 GB` | `0.2691` | `0.3168` | `82.87%` |
+| `Qwen/Qwen3.8-27B` | [`Qwen3.8-27B-W2.2A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-27B-W2.2A16-HGPTQ-RCO) ([report](results/rco-27b-w2w4/TECHNICAL-W2.2A16-HGPTQ-RCO.md)) | `16.5%` `W4` (`H_512`) | `11.06 GiB` (`7.00 GiB`) | `12 GB` / `16 GB` | `0.3187` | `0.3809` | `78.00%` |
+| `Qwen/Qwen3.6-35B-A3B` | [`Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.6-35B-A3B-W2.6A16-HGPTQ-RCO) ([report](results/rco-35b-w2w4/TECHNICAL-W2.6A16-HGPTQ-RCO.md)) | `12/40` exp (`H_512`) | `13.01 GiB` (`10.94 GiB`) | `16 GB` | `0.1784` | `0.1614` | `86.10%` |
+| `ornith-ai/Ornith-1.5-35B-A3B` | [`Ornith-1.5-35B-A3B-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Ornith-1.5-35B-A3B-W2.6A16-HGPTQ-RCO) ([report](results/ornith-15-35b-a3b-w26a16-hgptq-rco/TECHNICAL.md)) | `12/40` exp (`H_512`) | `13.01 GiB` (`10.94 GiB`) | `16 GB` | `0.2283` | `0.3934` | — |
+| `Qwen/Qwen3.8-Flash-Next` | [`Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO`](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-W2.6A16-HGPTQ-RCO) ([report](results/qwen38-flash-next-w26a16-hgptq-rco/TECHNICAL.md)) | `15/48` exp (`H_128`) | `71.67 GiB` (`44.84 GiB` trunk) | `48 GB` / `2× 24 GB` | `0.1091` | `0.1961` | — |
 
-> **Why Text Backbone (`layers 0..L-1`) GiB & bpw is the primary size column:** Total checkpoint file size mixes incomparable components (`nchapman/*` bundles Vision + Native MTP + `BF16` `embed_tokens` + `W8_g64` `lm_head`; Unsloth GGUF splits Vision into a separate `mmproj` and quantizes `embed_tokens` to `Q4_K`–`Q6_K`; EXL3 checkpoints vary in whether Vision/MTP are included). Measuring exact stored bytes strictly over `layers 0..L-1` (plus final RMSNorm) isolates the actual transformer trunk compression rate (`Text Total` including `embed_tokens` + `lm_head` and `File Total` are listed in the JSON receipts).
+### Speculative Drafters & Diffusion Pipelines (`W4A16-HGPTQ`)
 
-#### `Qwen/Qwen3.8-27B` (`24.35B` Text-Backbone Parameters)
-Receipts: [`probe_comparison.json`](results/dense-w4a16-hgptq/27b-g64-h64/probe_comparison.json) · [`evalscope_comparison.json`](results/dense-w4a16-hgptq/27b-g64-h64/evalscope_comparison.json) *(historical 5-way `NVFP4`/`UD-Q4_K_M` receipt retained in [`unsloth_comparison.json`](results/dense-w4a16-hgptq/27b-g64-h64/unsloth_comparison.json))*.
+| Type | Artifact (`nchapman/*`) | Size (BF16 → Quant) | Key Fidelity Metric | Report |
+|---|---|---|---|---|
+| `DFlash2` drafter (`27B`) | [`Qwen3.8-27B-DFlash2-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-27B-DFlash2-W4A16-HGPTQ) | `3.58 GiB → 1.31 GiB` (`2.74×`) | $\tau$: `2.540 → 2.535` (`99.8%`), `Recall@16`: `53.88%` (`100.0%`) | [report](results/dense-w4a16-hgptq/dflash2-27b-TECHNICAL.md) |
+| `DFlash2` drafter (`Flash-Next`) | [`Qwen3.8-Flash-Next-DFlash2-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen3.8-Flash-Next-DFlash2-W4A16-HGPTQ) | `1.12 GiB → 0.52 GiB` (`2.17×`) | $\tau$: `2.760 → 2.752` (`99.7%`), `Recall@16`: `59.67% → 59.60%` | [report](results/dense-w4a16-hgptq/dflash2-flash-next-TECHNICAL.md) |
+| Image-gen (`Turbo`) | [`Qwen-Image-2.1-Turbo-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen-Image-2.1-Turbo-W4A16-HGPTQ) | `32.45 GiB → 9.82 GiB` (`3.31×`) | Velocity cos `0.9994` (`30.42 dB`), PSNR `25.46 dB` (`36.53 dB` TI2I) | [report](results/qwen-image-21-turbo-w4a16-hgptq/README.md) |
+| Image-gen (`Base`) | [`Qwen-Image-2.1-W4A16-HGPTQ`](https://huggingface.co/nchapman/Qwen-Image-2.1-W4A16-HGPTQ) | `32.45 GiB → 9.82 GiB` (`3.31×`) | Velocity cos `0.9991` (`28.85 dB`), PSNR `26.97 dB` (`36.61 dB` TI2I) | [report](results/qwen-image-21-w4a16-hgptq/README.md) |
 
-| Checkpoint | Format | Text Backbone (`bpw`) | `probe-v4` `w_kl` (`mean_kl`) | `probe-guard` `mean_kl` | `IFEval` Prompt / Inst Strict | `MATH-500` Acc | `HumanEval+` Pass@1 | 3-Task Avg |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| `Qwen/Qwen3.8-27B` | `BF16` reference (`VLM+MTP`) | `45.36 GiB` (`16.00`) | — | — | `82.62%` / `87.77%` | `84.80%` | `93.29%` | `86.90%` |
-| **`nchapman/Qwen3.8-27B-W4A16-HGPTQ`** | `W4_g64` + $H_{64}$ + `H-CD` + `QAT` (`VLM+MTP`, vLLM Marlin) | **`12.09 GiB`** (`4.26`) | `0.1002` (`0.2583`) | `0.0530` | `81.89%` / `87.41%` | `82.80%` | **`93.29%`** | `85.99%` |
-| `turboderp/Qwen3.8-27B-exl3` (`SCP_4.00bpw`) | `EXL3` trellis `4.00 bpw` (`QTIP`) | `11.39 GiB` (`4.02`) | `0.0929` (`0.2486`) | **`0.0343`** | **`82.26%`** / `87.41%` | **`83.80%`** | `92.68%` | **`86.25%`** |
-| `unsloth/Qwen3.8-27B-GGUF` (`UD-Q4_K_XL`) | Dynamic `Q4_K_XL` (`+19.7%` larger trunk than `W4A16-HGPTQ`) | `14.47 GiB` (`5.11`) | **`0.0714`** (`0.1819`) | `0.0418` | `80.41%` / `86.33%` | `83.20%` | **`93.90%`** | `85.84%` |
-| **`nchapman/Qwen3.8-27B-W2.6A16-HGPTQ-RCO`** | `W2/W4` `RCO` (`30% W4`, `VLM+MTP`, vLLM Marlin) | `8.12 GiB` (`2.86`) | `0.2717` (`0.4265`) | `0.3272` | `75.23%` / `82.73%` | `82.40%` | `81.10%` | `79.58%` |
-| `turboderp/Qwen3.8-27B-exl3` (`SCP_3.00bpw`) | `EXL3` trellis `3.00 bpw` (`QTIP`) | `8.56 GiB` (`3.02`) | **`0.1924`** (`0.4871`) | **`0.0918`** | **`82.07%`** / `87.41%` | **`82.80%`** | **`92.07%`** | **`85.65%`** |
-| `unsloth/Qwen3.8-27B-GGUF` (`UD-Q2_K_XL`) | Dynamic `Q2_K_XL` (mixed `Q2_K`/`Q3_K`/`Q4_K`) | **`7.87 GiB`** (`2.78`) | `0.3385` (`0.6760`) | `0.3732` | `81.52%` / `87.17%` | **`82.80%`** | **`92.07%`** | `85.46%` |
+## Benchmarks & Technical Reports
 
-#### `Qwen/Qwen3.5-9B` (`6.92B` Text-Backbone Parameters)
-Receipts: [`probe_comparison.json`](results/dense-w4a16-hgptq/9b-g64-h64/probe_comparison.json) · [`evalscope_comparison.json`](results/dense-w4a16-hgptq/9b-g64-h64/evalscope_comparison.json) · [`sub3bit_diagnostic.json`](results/dense-w4a16-hgptq/9b-g64-h64/sub3bit_diagnostic.json) · [`sub3bit_ablation.json`](results/dense-w4a16-hgptq/9b-g64-h64/sub3bit_ablation.json).
+Detailed methodology, ablations, bootstrap confidence intervals, and measured GPU receipts live in dedicated reports under `results/`:
 
-| Checkpoint | Format | Text Backbone (`bpw`) | `probe-v4` `w_kl` (`mean_kl`) | `probe-guard` `mean_kl` | `IFEval` Prompt / Inst Strict | `MATH-500` Acc | `HumanEval+` Pass@1 | 3-Task Avg |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| `Qwen/Qwen3.5-9B` | `BF16` reference (`VLM+MTP`) | `12.89 GiB` (`16.00`) | — | — | `84.47%` / `89.33%` | `84.60%` | `84.15%` | `84.41%` |
-| **`nchapman/Qwen3.5-9B-W4A16-HGPTQ`** | `W4_g64` + $H_{64}$ + `H-CD` + `QAT` (`VLM+MTP`, vLLM Marlin) | **`3.43 GiB`** (`4.26`) | `0.0638` (`0.1897`) | `0.0399` | `83.92%` / `88.61%` | `82.60%` | `83.54%` | `83.35%` |
-| `TheMelonGod/Qwen3.5-9B-exl3` (`6hb-4.0bpw`) | `EXL3` trellis `4.00 bpw` (`v1.4.1`, `mul1`) | `3.24 GiB` (`4.02`) | `0.0610` (`0.1914`) | `0.0206` | `83.55%` / `88.85%` | **`83.60%`** | `82.32%` | `83.16%` |
-| `unsloth/Qwen3.5-9B-GGUF` (`UD-Q4_K_XL`) | Dynamic `Q4_K_XL` (`+23.6%` larger trunk than `W4A16-HGPTQ`) | `4.24 GiB` (`5.26`) | **`0.0537`** (`0.1736`) | **`0.0191`** | **`84.66%`** / `89.57%` | **`83.60%`** | **`85.37%`** | **`84.54%`** |
-| **`nchapman/Qwen3.5-9B-W2.6A16-HGPTQ-RCO`** | `W2/W4` `RCO` (`30% W4`, `VLM+MTP`, vLLM Marlin) | `2.31 GiB` (`2.86`) | `0.2661` (`0.3431`) | `0.3642` | `60.07%` / `69.54%` | `68.00%` | `60.98%` | `63.02%` |
-| `TheMelonGod/Qwen3.5-9B-exl3` (`6hb-3.0bpw`) | `EXL3` trellis `3.00 bpw` (`v1.4.1`, `mul1`) | `2.43 GiB` (`3.02`) | **`0.1395`** (`0.3708`) | **`0.0685`** | **`84.10%`** / `89.21%` | **`82.80%`** | **`78.66%`** | **`81.85%`** |
-| `TheMelonGod/Qwen3.5-9B-exl3` (`6hb-2.5bpw`) | `EXL3` trellis `2.50 bpw` (`v1.4.1`, `mul1`, diagnostic) | **`2.03 GiB`** (`2.52`) | `0.2516` (`0.5302`) | `0.1725` | `81.89%` / `87.41%` | `76.80%` | `71.34%` | `76.68%` |
-| `unsloth/Qwen3.5-9B-GGUF` (`UD-Q2_K_XL`) | Dynamic `Q2_K_XL` (mixed `Q2_K`/`Q3_K`/`Q4_K`) | `2.52 GiB` (`3.13`) | `0.2810` (`0.6090`) | `0.2011` | `77.45%` / `83.93%` | `73.00%` | `68.90%` | `73.12%` |
-| **`HGPTQ-RCO v2` (`Q1`, `w2_g64_sym` + clean QAT)** | `w2_g64_sym` (`±0.5, ±1.5`) + `H_64` (`30% W4`, Marlin) | **`2.30 GiB`** (`2.85`) | `0.2621` (`0.3868`) | `0.3118` | `73.94%` / `81.41%` | `71.60%` | `67.68%` | `71.07%` |
-| **`HGPTQ-RCO v2` (`D1`, `g128_sym` + `H_512` + clean QAT)** | `w2_g128_sym` + `w4_g128` + `H_512` (`36.75% W4`, Marlin) | **`2.31 GiB`** (`2.86`) | `0.2470` (`0.3785`) | `0.2935` | **`79.67%`** / `85.97%` | **`74.20%`** | **`70.12%`** | **`74.66%`** |
+| Topic | Report | Highlights |
+|---|---|---|
+| **7-Arm Cross-Format Comparison (`EXL3`, Unsloth `GGUF`, `HGPTQ-RCO` V2)** | [`results/dense-w4a16-hgptq/COMPARISON.md`](results/dense-w4a16-hgptq/COMPARISON.md) | Full `N=1,205` EvalScope (`IFEval`, `MATH-500`, `HumanEval+`) + `20,000`-draw paired bootstrap CIs. `W4A16-HGPTQ` reaches statistical parity with `BF16` (`85.99%` on `27B`, `83.35%` on `9B`); `HGPTQ-RCO` V2 reaches `75.74%` (`9B` W2.6, beating `UD-Q2_K_XL` `73.12%`), `82.87%` (`27B` W2.6), and `86.10%` (`35B` W2.6). |
+| **Consumer GPU `128K` Fit & Throughput (`warp34`)** | [`results/warp34-consumer-gpu-128k/README.md`](results/warp34-consumer-gpu-128k/README.md) | Live `RTX 4060 8 GB`, `RTX 3060 12 GB`, `RTX 4060 Ti 16 GB`, and `1× / 2× RTX 3090 24 GB` VRAM + LoRA + Desktop OS headroom and MTP throughput matrices. |
+| **Layer-1 PLE `Custom-LUT4` Design (`Qwen3.8-Flash-Next`)** | [`results/qwen38-flash-next-w4a16-hgptq/PLE-QUANTIZATION-DESIGN.md`](results/qwen38-flash-next-w4a16-hgptq/PLE-QUANTIZATION-DESIGN.md) | Analytical `W_kv`-HGPTQ + Coordinate Descent (`6.655%` `key_proj` Rel-RMSE vs. `9.449%` `NVFP4`) and 4 KiB page-slotted NVMe layout (`0.000%` page-straddle rate). |
+| **Sub-3-Bit RCO Pareto Sweeps** | [`2B`](results/rco-2b-w2w4/README.md) · [`9B`](results/rco-9b-w2w4/README.md) · [`27B`](results/rco-27b-w2w4/README.md) · [`35B-A3B`](results/rco-35b-w2w4/README.md) | Per-layer `W2`/`W4` allocation search, Hessian Coordinate Descent (`H-CD`), and FP32-master `RMSNorm`/GDN KL QAT receipts. |
 
-#### Key Findings & Methodology Notes
-- **4-bit tier (`W4A16-HGPTQ` vs. `EXL3 4.0bpw` vs. `UD-Q4_K_XL`):** Across both `27B` and `9B`, all three 4-bit methods achieve **statistical parity with `BF16` and with one another** on every generative benchmark (every 95% paired bootstrap CI across `IFEval`, `MATH-500`, and `HumanEval+` spans `0 pp`). `W4A16-HGPTQ` matches `UD-Q4_K_XL` while using **`16.4%` (`27B`) to `19.1%` (`9B`) fewer text-backbone bytes** (`4.26 bpw` vs. `5.11–5.26 bpw`), keeping **Vision + Native MTP** inside the same checkpoint, and serving natively on `vLLM` Marlin / `warp34` W4A16 kernels.
-- **Sub-3-bit / 3-bit tier (`2.52–3.13 bpw`), diagnostic & `2/4/8`-bit recovery:** Shipping `W2.6A16-HGPTQ-RCO` (`2.86 bpw`) initially trailed `EXL3 3.0bpw` and `UD-Q2_K_XL` on both `27B` and `9B` (`p < 0.001`). Diagnostic controls on `9B` ([`sub3bit_diagnostic.json`](results/dense-w4a16-hgptq/9b-g64-h64/sub3bit_diagnostic.json)) proved this was neither a raw bit-budget cliff (`EXL3 2.5bpw` scored `76.68%` at `2.52 bpw`) nor a vLLM W2 Marlin bug (pure-`BF16` dequantized control reproduced `62.36%` vs `63.02%`), isolating the loss to asymmetric-range `uint2b2` (`{-2,-1,0,+1}`) plus an `all_low`-anchored norm bug in `runner.py`. A 25-arm strictly `2/4/8`-bit ablation ([`sub3bit_ablation.json`](results/dense-w4a16-hgptq/9b-g64-h64/sub3bit_ablation.json)) closed `+11.64 pp` at the exact `2.86 bpw` budget:
-  - **Drop-in `g64-h64` (`Q1`, `w2_g64_sym` `{-1.5,-0.5,+0.5,+1.5}` + clean-BF16 `W2` scale-only polish, `2.85 bpw`):** **`71.07%` avg (`+8.05 pp`)**; maps losslessly to `uint4b8` Marlin (`u4 = 2*u2 + 5 ∈ {5,7,9,11}`, `scale / 2`, now wired into `vllm_plugin.py` and `warp-quant rco`).
-  - **Sub-3-bit SOTA (`D1`, `--options w2_g128_sym w4_g128 --hadamard-block-size 512 --budgets 0.3675`, `2.86 bpw`):** **`74.66%` avg (`+11.64 pp`)** — **beats Unsloth `UD-Q2_K_XL` (`73.12%` @ `3.13 bpw`) on ALL 3 benchmarks** (`79.67%` vs `77.45%` IFEval, `74.20%` vs `73.00%` MATH-500, `70.12%` vs `68.90%` HumanEval+) while using `0.27 bpw` fewer bits and staying 100% Marlin-native (within `2.02 pp` of `EXL3 2.5bpw`'s `76.68%` trellis ceiling).
-- **Evaluation parity note:** All three formats are weight-only (`A16`) quants. To eliminate backend confounds (`vLLM` vs. `llama.cpp` vs. `TabbyAPI` GDN kernels, RoPE, and chat templates) and avoid the FP32-vs-BF16 activation mismatch of HF's native `gguf_file` loader, `EXL3` (reconstructed via `exllamav3` `LinearEXL3.get_weight_tensor()` and verified against live GPU `LinearEXL3.forward` with `cosine >= 0.9999998`, `max_abs_diff <= 0.0015`) and `GGUF` (`gguf>=0.19`) are exported to clean `bfloat16` `Qwen3_5ForCausalLM` checkpoints and scored through the exact same `PyTorch` probe and `vLLM` server; `W4A16-HGPTQ` and `W2.6A16-HGPTQ-RCO` run natively through their real quantized `compressed-tensors`/Marlin kernels.
+## Architecture
 
+| Path | Role |
+|---|---|
+| `src/warp_quant/cli.py` | Unified `warp-quant` CLI (`list-models`, `build-vision-data`, `build-image-data`, `quantize`, `probe`, `rco`, `heretic-lora`, `eval`) |
+| `src/warp_quant/models.py` | Model registry (`MODELS`), pinned Hub revisions, and default quantization recipes |
+| `src/warp_quant/hadamard_gptq.py` | Dense `W4A16-HGPTQ` quantization, target regexes (`TEXT_TARGET_RE`, `MTP_TARGET_RE`, `VISION_*_RE`), Marlin alignment checks, and teacher-forced probing |
+| `src/warp_quant/streaming_moe.py` | Streaming layer-by-layer MoE quantization, 4-bit `Custom-LUT4` PLE, hot-expert routing profiler, and MoE RCO/QAT |
+| `src/warp_quant/rco/` | Dense candidate bank builder, Gauss–Seidel `H-CD`, Riemannian `HGPTQ-RCO` search, E2E Scale/Norm KL QAT, and checkpoint assembly |
+| `src/warp_quant/vllm_plugin.py` | `vllm.general_plugins` runtime plugin (`vllm_warp_quant.py` bundled in checkpoints) for Hadamard transforms, `code_offset=0.5` W2 Marlin/Humming repack, and `Qwen4Exp` PLE |
+| `data/` | Frozen SHA-256-verified text calibration/probe splits (`calib-cascade-v1.jsonl`, `probe-v4.jsonl`, `probe-guard.jsonl`, `SHA256SUMS`) |
 
+## Scope & Limitations
 
+- **Supported model families only:** Designed for Qwen 3.5 / 3.6 / 3.8 dense VLMs, MoE models (`35B-A3B`, `Qwen3.8-Flash-Next`), `Qwen-Image-2.1`, `DFlash2` drafters, and `d3` / `GLiDE` decision classifiers. It is not a general-purpose quantizer for arbitrary Hugging Face architectures.
+- **GPU & kernel requirements:** Quantizing and probing require Linux + NVIDIA CUDA GPUs. Always run `mise run setup-kernels` before calibrating or probing; without `causal-conv1d` and `flash-linear-attention`, GatedDeltaNet layers fall back to a ~15× slower Python loop.
+- **Serving runtime:** Output checkpoints use strict `2/4/8`-bit `compressed-tensors` with online Hadamard transforms and are intended for [`warp34`](https://github.com/nchapman/warp34) or `vLLM` (`--trust-remote-code` with the bundled `vllm_warp_quant.py` plugin).
+
+## Development
+
+```bash
+mise run fmt          # format src/ and tests/ with ruff
+mise run check        # ruff format --check + ruff check + pytest
+mise run verify-data  # verify data/SHA256SUMS (frozen datasets must never be modified)
+```
+
+## License
+
+This repository does not currently include a repository-level `LICENSE` file. Each published quantized checkpoint inherits the license of its upstream base model (e.g., Apache-2.0, MIT, Qwen Community 1.0, Swift Open License 1.0, or Fastino Community License), listed in each checkpoint's Hugging Face model card and companion `TECHNICAL.md`.
